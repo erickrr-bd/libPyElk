@@ -1,7 +1,7 @@
 from libPyUtils import libPyUtils
 from warnings import simplefilter
 from ssl import create_default_context
-from elasticsearch_dsl import Q, Search, A
+from elasticsearch_dsl import Q, Search, A, utils
 from elasticsearch import Elasticsearch, RequestsHttpConnection, exceptions
 
 class libPyElk:
@@ -100,3 +100,31 @@ class libPyElk:
 		search_to_elastic.aggs.bucket('events', aggregation)
 		result_search = search_to_elastic.execute()
 		return result_search
+
+
+	def generateTelegramMessagewithElasticData(self, hit):
+		"""
+		Method that generates the telegram message based on data from ElasticSearch .
+
+		Returns the message to be sent via Telegram.
+
+		:arg hit: Object that contains the ElasticSearch Data.
+		"""
+		message_telegram = ""
+		for hits in hit:
+			if not (type(hit[str(hits)]) is utils.AttrDict):
+				message_telegram += u'\u2611\uFE0F' + " " + hits + " = " + str(hit[str(hits)]) + '\n'
+			else:
+				for hits_two in hit[str(hits)]:
+					if not (type(hit[str(hits)][str(hits_two)]) is utils.AttrDict):
+						message_telegram += u'\u2611\uFE0F' + " " + hits + "." + hits_two + " = " + str(hit[str(hits)][str(hits_two)]) + '\n'
+					else:
+						for hits_three in hit[str(hits)][str(hits_two)]:
+							if not (type(hit[str(hits)][str(hits_two)][str(hits_three)]) is utils.AttrDict):
+								message_telegram += u'\u2611\uFE0F' + " " + hits + "." + hits_two + "." + hits_three + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
+							else:
+								for hits_four in hit[str(hits)][str(hits_two)][str(hits_three)]:
+									if not (type(hit[str(hits)][str(hits_two)][str(hits_three)][str(hits_four)]) is utils.AttrDict):
+										message_telegram += u'\u2611\uFE0F' + " " + hits + "." + hits_two + "." + hits_three + "." + hits_four + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
+		message_telegram += "\n\n"
+		return message_telegram		
