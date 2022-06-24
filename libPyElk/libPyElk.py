@@ -5,7 +5,6 @@ from elasticsearch_dsl import Q, Search, A, utils
 from elasticsearch import Elasticsearch, RequestsHttpConnection, exceptions
 
 class libPyElk:
-
 	"""
 	Attribute that contains an object of the libPyUtils library.
 	"""
@@ -32,8 +31,10 @@ class libPyElk:
 
 		Returns an object containing a connection to ElasticSearch.
 		
-		:arg data_configuration: Object that contains the data obtained from a YAML file.
-		:arg **kwargs: Allows passing variable-length arguments associated with a name or key to a function.
+		:arg data_configuration (JSON Object): Object that contains the data obtained from a YAML file.
+
+		Keyword Args:
+        	:arg path_key_file (String): Absolute path where the key file is located.
 		"""
 		if data_configuration['use_ssl_tls'] == False and data_configuration['use_http_authentication'] == False:
 			conn_es = Elasticsearch(data_configuration['es_host'], port = data_configuration['es_port'], connection_class = RequestsHttpConnection, use_ssl = data_configuration['use_ssl_tls'])
@@ -55,31 +56,72 @@ class libPyElk:
 			if data_configuration['validate_certificate_ssl'] == False:
 				conn_es = Elasticsearch(data_configuration['es_host'], port = data_configuration['es_port'], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration['use_ssl_tls'], verify_certs = data_configuration['validate_certificate_ssl'], ssl_show_warn = False)
 			else:
-				context = create_default_context(cafile = kwargs['path_certificate_file'])
+				context = create_default_context(cafile = data_configuration['path_certificate_file'])
 				conn_es = Elasticsearch(data_configuration['es_host'], port = data_configuration['es_port'], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration['use_ssl_tls'], verify_certs = data_configuration['validate_certificate_ssl'], ssl_context = context)
 		return conn_es
 
 
-	def searchQueryStringElasticSearch(self, conn_es, index_pattern_name, query_string, gte, use_specific_fields, **kwargs):
+	def createSearchObject(self, conn_es, index_pattern_name):
+		"""
+		Method that creates a Search type Object in ElasticSearch.
+
+		Returns a Search type object in ElasticSearch.
+
+		:arg conn_es: Object that contains a connection to ElasticSearch.
+		:arg index_pattern_name: Index pattern name where the search is performed.
+		"""
+		search_in_elastic = Search(index = index_pattern_name).using(conn_es).params(request_timeout = 30)
+		search_in_elastic = search_in_elastic[0:10000]
+		return search_in_elastic
+
+
+	def executeSearchQueryString(self, search_in_elastic, gte, lte, query_string, use_fields_option, **kwargs):
 		"""
 		Method that performs a search in ElasticSearch using Query String.
 
 		Returns an object with the search result.
-
-		:arg conn_es: Object that contains a connection to ElasticSearch.
-		:arg index_pattern_name: Name of the index pattern where the search will be performed.
-		:arg query_string: Query String used to perform the search in ElasticSearch.
-		:arg gte: Gte using to define the time range for the search in ElasticSearch.
-		:arg use_specific_fields: Whether or not to use the option that the search in ElasticSearch returns only certain fields and not all.
-		:arg **kwargs: Allows passing variable-length arguments associated with a name or key to a function.
+		
+		:arg search_in_elastic (Search Object): Search type object in ElasticSearch.
+		:arg gte (String): Gte using to define the time range for the search in ElasticSearch.
+		:arg lte (String): Lte using to define the time range for the search in ElasticSearch.
+		:arg query_string (String): Query String with which the search is performed in ElasticSearch.
+		:arg use_fields_option (Boolean): Whether or not to use the option to use fields.
+		
+		Keyword Args:
+        	:arg fields (String's List): Names of the fields that will be returned by the search in ElasticSearch.
 		"""
 		query_string_to_elastic = Q("query_string", query = query_string)
-		search_to_elastic_aux = Search(index = index_pattern_name).using(conn_es)
-		search_to_elastic_aux = search_to_elastic_aux[0:10000]
-		if use_specific_fields == True:
-			search_to_elastic = search_to_elastic_aux.query(query_string_to_elastic).query('range', ** {'@timestamp' : {'gte' : gte, 'lte' : "now"}}).source(fields = kwargs['specific_fields'])
+		if use_fields_option == True:
+			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query('range', ** {'@timestamp' : {'gte' : gte, 'lte' : lte}}).source(fields = kwargs['fields'])
 		else:
-			search_to_elastic = search_to_elastic_aux.query(query_string_to_elastic).query('range', ** {'@timestamp' : {'gte' : gte, 'lte' : "now"}}).source(fields = None)
+			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query('range', ** {'@timestamp' : {'gte' : gte, 'lte' : lte}}).source(fields = None)
+		result_search = search_to_elastic.execute()
+		return result_search
+
+
+	def executeSearchQueryStringWithAggregation(self, search_in_elastic, field_name, gte, lte, query_string, use_fields_option, **kwargs):
+		"""
+		Method that performs a search in ElasticSearch using Query String and an Aggregation.
+		
+		Returns an object with the search result.
+
+		:arg search_in_elastic (Search Object): Search type object in ElasticSearch.
+		:arg field_name (String): Field's name that be used for the Aggregation.
+		:arg gte (String): Gte using to define the time range for the search in ElasticSearch.
+		:arg lte (String): Lte using to define the time range for the search in ElasticSearch.
+		:arg query_string (String): Query String with which the search is performed in ElasticSearch.
+		:arg use_fields_option (Boolean): Whether or not to use the option to use fields.
+
+		Keyword Args:
+        	:arg fields (String's List): Names of the fields that will be returned by the search in ElasticSearch.
+		"""
+		query_string_to_elastic = Q("query_string", query = query_string)
+		if use_fields_option == True:
+			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query('range', ** {'@timestamp' : {'gte' : gte, 'lte' : lte}}).source(fields = kwargs['fields'])
+		else:
+			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query('range', ** {'@timestamp' : {'gte' : gte, 'lte' : lte}}).source(fields = None)
+		aggregation = A('terms', field = field_name, size = 10000)
+		search_to_elastic.aggs.bucket('events', aggregation)
 		result_search = search_to_elastic.execute()
 		return result_search
 
@@ -108,7 +150,7 @@ class libPyElk:
 
 		Returns the message to be sent via Telegram.
 
-		:arg hit: Object that contains the ElasticSearch Data.
+		:arg hit (Object): Object that contains the ElasticSearch Data.
 		"""
 		message_telegram = ""
 		for hits in hit:
