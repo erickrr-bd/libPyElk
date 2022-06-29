@@ -169,4 +169,60 @@ class libPyElk:
 									if not (type(hit[str(hits)][str(hits_two)][str(hits_three)][str(hits_four)]) is utils.AttrDict):
 										message_telegram += u'\u2611\uFE0F' + " " + hits + "." + hits_two + "." + hits_three + "." + hits_four + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
 		message_telegram += "\n\n"
-		return message_telegram		
+		return message_telegram
+
+
+	def getFieldsofElasticData(self, hit):
+		"""
+		Method that obtains the names of the fields obtained in a search and saves them in a list.
+
+		Returns a list with the names of the fields obtained in the search.
+
+		:arg hit (Object): Object that contains the ElasticSearch Data.
+		"""
+		headers = []
+		for hits in hit:
+			if not (type(hit[str(hits)]) is utils.AttrDict):
+				headers.append(hits)
+			else:
+				for hits_two in hit[str(hits)]:
+					if not (type(hit[str(hits)][str(hits_two)]) is utils.AttrDict):
+						headers.append(hits + "." + hits_two)
+					else:
+						for hits_three in hit[str(hits)][str(hits_two)]:
+							if not (type(hit[str(hits)][str(hits_two)][str(hits_three)]) is utils.AttrDict):
+								headers.append(hits + "." + hits_two + "." + hits_three)
+							else:
+								for hits_four in hit[str(hits)][str(hits_two)][str(hits_three)]:
+									if not (type(hit[str(hits)][str(hits_two)][str(hits_three)][str(hits_four)]) is utils.AttrDict):
+										headers.append(hits + "." + hits_two + "." + hits_three + "." + hits_four)
+		return headers
+
+
+	def generateArraywithElasticData(self, hit):
+		"""
+		Method that converts the hits obtained in a search into a list.
+
+		Returns a list with other lists with the values obtained in the search in ElasticSearch.
+
+		:arg hit (Object): Object that contains the ElasticSearch Data.
+		"""
+		list_to_data = []
+		list_to_hit = []
+		for hits in hit:
+			if not (type(hit[str(hits)]) is utils.AttrDict):
+				list_to_hit.append(str(hit[str(hits)]))
+			else:
+				for hits_two in hit[str(hits)]:
+					if not (type(hit[str(hits)][str(hits_two)]) is utils.AttrDict):
+						list_to_hit.append(str(hit[str(hits)][str(hits_two)]))
+					else:
+						for hits_three in hit[str(hits)][str(hits_two)]:
+							if not (type(hit[str(hits)][str(hits_two)][str(hits_three)]) is utils.AttrDict):
+								list_to_hit.append(str(hit[str(hits)][str(hits_two)][str(hits_three)]))
+							else:
+								for hits_four in hit[str(hits)][str(hits_two)][str(hits_three)]:
+									if not (type(hit[str(hits)][str(hits_two)][str(hits_three)][str(hits_four)]) is utils.AttrDict):
+										list_to_hit.append(str(hit[str(hits)][str(hits_two)][str(hits_three)]))
+			list_to_data.append(list_to_hit)
+		return list_to_data			
