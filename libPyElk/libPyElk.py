@@ -25,6 +25,25 @@ class libPyElk:
 		simplefilter("ignore", self.exceptions.ElasticsearchWarning)
 
 
+	def createConnectionToElasticSearchWithoutAuthentication(self, data_configuration):
+		"""
+		Method that creates a connection to ElasticSearch without authentication from data stored in a YAML file.
+
+		Returns an object containing a connection to ElasticSearch.
+		
+		:arg data_configuration (dict): Object that contains the data obtained from a YAML file.
+		"""
+		if data_configuration["use_ssl_tls"] == False:	
+			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], use_ssl = data_configuration["use_ssl_tls"])
+		else:
+			if data_configuration["verificate_certificate_ssl"] == False:
+				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_show_warn = False)
+			else:
+				context = create_default_context(cafile = data_configuration["path_certificate_file"])
+				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_context = context)
+		return conn_es
+
+
 	def createConnectionToElasticSearch(self, data_configuration, **kwargs):
 		"""
 		Method that creates a connection with ElasticSearch from data stored in a YAML file.
@@ -59,6 +78,40 @@ class libPyElk:
 				context = create_default_context(cafile = data_configuration["path_certificate_file"])
 				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["validate_certificate_ssl"], ssl_context = context)
 		return conn_es
+
+
+	def createConnectionToElasticSearchAPIKey(self, data_configuration, path_key_file):
+		"""
+		Method that creates a connection to ElasticSearch using API key authentication from data stored in a YAML file.
+
+		Returns an object containing a connection to ElasticSearch.
+		
+		:arg data_configuration (dict): Object that contains the data obtained from a YAML file.
+		:arg path_key_file (string): Absolute path of the file where the passphrase for the encryption/decryption process is located.
+		"""
+		passphrase = self.__utils.getPassphraseKeyFile(path_key_file)
+		api_key_id = self.__utils.decryptDataWithAES(data_configuration["api_key_id"], passphrase).decode("utf-8")
+		api_key = self.__utils.decryptDataWithAES(data_configuration["api_key"], passphrase).decode("utf-8")
+		if data_configuration["use_ssl_tls"] == False:	
+			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], api_key = (api_key_id, api_key), use_ssl = data_configuration["use_ssl_tls"])
+		else:
+			if data_configuration["verificate_certificate_ssl"] == False:
+				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, api_key = (api_key_id, api_key), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_show_warn = False)
+			else:
+				context = create_default_context(cafile = data_configuration["path_certificate_file"])
+				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, api_key = (api_key_id, api_key), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_context = context)
+		return conn_es
+
+
+	def createDocumentInIndex(self, conn_es, index_name, body_data):
+		"""
+		Method that creates a document in an index in ElasticSearch.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg index_name (string): Name of the index where the document will be entered.
+		:arg body_data (JSON): JSON object with the data that will be inserted in ElasticSearch.
+		"""
+		conn_es.index(index = index_name, body = body_data)
 
 
 	def createSearchObject(self, conn_es, index_pattern_name):
@@ -142,6 +195,12 @@ class libPyElk:
 		search_to_elastic.aggs.bucket("events", aggregation)
 		result_search = search_to_elastic.execute()
 		return result_search
+
+
+	def createNewFsRepository(self, conn_es, repository_name, path_repository, use_compress_option):
+		"""
+		"""
+		conn_es.snapshot.create_repository(repository = repository_name, body = {"type" : "fs", "settings" : {"location" : path_repository, "compress" : use_compress_option}})
 
 
 	def generateTelegramMessagewithElasticData(self, hit):
