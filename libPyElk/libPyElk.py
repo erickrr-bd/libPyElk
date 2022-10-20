@@ -80,6 +80,29 @@ class libPyElk:
 		return conn_es
 
 
+	def createConnectionToElasticSearchHTTPAuthentication(self, data_configuration, path_key_file):
+		"""
+		Method that creates a connection to ElasticSearch using HTTP authentication from data stored in a YAML file.
+
+		Returns an object containing a connection to ElasticSearch.
+		
+		:arg data_configuration (dict): Object that contains the data obtained from a YAML file.
+		:arg path_key_file (string): Absolute path of the file where the passphrase for the encryption/decryption process is located.
+		"""
+		passphrase = self.__utils.getPassphraseKeyFile(path_key_file)
+		user_http_authentication = self.__utils.decryptDataWithAES(data_configuration["user_http_authentication"], passphrase).decode("utf-8")
+		password_http_authentication = self.__utils.decryptDataWithAES(data_configuration["password_http_authentication"], passphrase).decode("utf-8")
+		if data_configuration["use_ssl_tls"] == False:	
+			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"])
+		else:
+			if data_configuration["verificate_certificate_ssl"] == False:
+				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_show_warn = False)
+			else:
+				context = create_default_context(cafile = data_configuration["path_certificate_file"])
+				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_context = context)
+		return conn_es
+
+
 	def createConnectionToElasticSearchAPIKey(self, data_configuration, path_key_file):
 		"""
 		Method that creates a connection to ElasticSearch using API key authentication from data stored in a YAML file.
