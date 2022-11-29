@@ -5,16 +5,6 @@ from elasticsearch_dsl import Q, Search, A, utils
 from elasticsearch import Elasticsearch, RequestsHttpConnection, exceptions
 
 class libPyElk:
-	"""
-	Attribute that contains an object of the libPyUtils library.
-	"""
-	__utils = None
-
-	"""
-	Attribute containing an object that corresponds to ElasticSearch exceptions.
-	"""
-	exceptions = None
-
 
 	def __init__(self):
 		"""
@@ -220,10 +210,75 @@ class libPyElk:
 		return result_search
 
 
+	def getDocumentsVersionChangeinIndex(self, conn_es, index_name):
+		"""
+		Method that obtains the documents where their version has changed.
+
+		Returns the list with all documents where their version has changed.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg index_name (string): Name of the index where the document will be entered.
+		"""
+		list_documents_version_changes = []
+		search_body = {"size" : 10000, "query": {"match_all" : {}}}
+		search_in_elastic = conn_es.search(index = index_name, body = search_body, scroll = "3m", version = True)
+		scroll_id = search_in_elastic["_scroll_id"]
+		scroll_size = len(search_in_elastic["hits"]["hits"])
+		while scroll_size > 0:
+			for hits in search_in_elastic["hits"]["hits"]:
+				if hits["_version"] > 1:
+					list_documents_version_changes.append((hits["_index"], hits["_id"], hits["_version"]))
+			search_in_elastic = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
+			scroll_id = search_in_elastic["_scroll_id"]
+			scroll_size = len(search_in_elastic["hits"]["hits"])
+		conn_es.clear_scroll(scroll_id = scroll_id)
+		return list_documents_version_changes
+
+
+	def getDocumentsVersionChangeinIndexPattern(self, conn_es, index_pattern_name, gte, lte):
+		"""
+		Method that obtains the documents where their version has changed.
+
+		Returns the list with all documents where their version has changed.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg index_pattern_name (string): Name of the index where the document will be entered.
+		:arg gte (string): Gte using to define the time range for the search in ElasticSearch.
+		:arg lte (string): Lte using to define the time range for the search in ElasticSearch.
+		"""
+		list_documents_version_changes = []
+		search_body = {"size" : 10000, "query": {"bool": {"must": [{"range": {"@timestamp": {"gte": gte, "lte" : lte}}},{"match_all": {}}]}}}
+		search_in_elastic = conn_es.search(index = index_pattern_name, body = search_body, scroll = "3m", version = True)
+		scroll_id = search_in_elastic["_scroll_id"]
+		scroll_size = len(search_in_elastic["hits"]["hits"])
+		while scroll_size > 0:
+			for hits in search_in_elastic["hits"]["hits"]:
+				if hits["_version"] > 1:
+					list_documents_version_changes.append((hits["_index"], hits["_id"], hits["_version"]))
+			search_in_elastic = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
+			scroll_id = search_in_elastic["_scroll_id"]
+			scroll_size = len(search_in_elastic["hits"]["hits"])
+		conn_es.clear_scroll(scroll_id = scroll_id)
+		return list_documents_version_changes
+
+
 	def createNewFsRepository(self, conn_es, repository_name, path_repository, use_compress_option):
 		"""
 		"""
 		conn_es.snapshot.create_repository(repository = repository_name, body = {"type" : "fs", "settings" : {"location" : path_repository, "compress" : use_compress_option}})
+
+
+	def getIndexes(self, conn_es):
+		"""
+		Method that gets all indexes stored in ElasticSearch.
+		
+		Returns the list with all indexes founded.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		"""
+		list_all_indexes = conn_es.indices.get('*')
+		list_all_indexes = sorted([index for index in list_all_indexes if not index.startswith('.')])
+		return list_all_indexes
 
 
 	def generateTelegramMessagewithElasticData(self, hit):
