@@ -262,23 +262,168 @@ class libPyElk:
 		return list_documents_version_changes
 
 
-	def createNewFsRepository(self, conn_es, repository_name, path_repository, use_compress_option):
+	def createRepository(self, conn_es, repository_name, path_repository, use_compress_option):
 		"""
+		Method that creates a repository in ElasticSearch.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Repository name.
+		:arg path_repository (string): Repository path.
+		:arg use_compress_option (boolean): Whether or not to use repository compression.
 		"""
 		conn_es.snapshot.create_repository(repository = repository_name, body = {"type" : "fs", "settings" : {"location" : path_repository, "compress" : use_compress_option}})
 
 
+	def deleteRepository(self, conn_es, repository_name):
+		"""
+		Method that deletes a repository.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		"""
+		conn_es.snapshot.delete_repository(repository = repository_name)
+
+
+	def getRepositories(self, conn_es):
+		"""
+		Method that obtains a list with all the repositories created in ElasticSearch.
+
+		Returns a list with the name of the repositories.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		"""
+		list_all_repositories = []
+		repositories_info = conn_es.cat.repositories(format = "json")
+		for repository in repositories_info:
+			list_all_repositories.append(repository["id"])
+		return list_all_repositories
+
+
+	def createSnapshot(self, conn_es, repository_name, index_name, wait_for_completion):
+		"""
+		Method that creates a snapshot in ElasticSearch.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Name of the repository where the snapshot is stored.
+		:arg index_name (string): Name of the index from which the snapshot will be taken.
+		:arg wait_for_completion (boolean): Whether or not to wait for the snapshot creation to complete.
+		"""
+		conn_es.snapshot.create(repository = repository_name, snapshot = index_name, body = {"indices" : index_name, "include_global_state" : False}, wait_for_completion = wait_for_completion)
+
+
+	def getStatusSnapshot(self, conn_es, repository_name, snapshot_name):
+		"""
+		Method that obtains the status of a snapshot.
+
+		Returns the current status of the snapshot.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Name of the repository where the snapshot is stored.
+		:arg snapshot_name (string): Name of the snapshot from which the status will be obtained.
+		"""
+		status_snapshot = conn_es.snapshot.status(repository = repository_name, snapshot = snapshot_name)
+		current_status_snapshot = status_snapshot["snapshots"][0]["state"]
+		return current_status_snapshot
+
+
+	def getSnapshotInfo(self, conn_es, repository_name, snapshot_name):
+		"""
+		Method that obtains information about an index.
+
+		Returns the snapshot information.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Name of the repository where the snapshot is stored.
+		:arg snapshot_name (string): Name of the snapshot from which the information will be obtained.
+		"""
+		snapshot_info = conn_es.snapshot.get(repository = repository_name, snapshot = snapshot_name)
+		return snapshot_info
+
+
+	def getSnapshotsbyRepository(self, conn_es, repository_name):
+		"""
+		Method that gets all the snapshot names of a specific repository.
+
+		Returns a list with the names of the snapshots.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Name of the repository where the snapshots are stored.
+		"""
+		list_all_snapshots = []
+		snapshots_info = conn_es.snapshot.get(repository = repository_name, snapshot = "_all")
+		for snapshot_info in snapshots_info["snapshots"]:
+			list_all_snapshots.append(snapshot_info["snapshot"])
+		list_all_snapshots = sorted(list_all_snapshots)
+		return list_all_snapshots
+
+
+	def restoreSnapshot(self, conn_es, repository_name, snapshot_name, wait_for_completion):
+		"""
+		Method that restores an ElasticSearch snapshot.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Name of the repository where the snapshot is stored.
+		:arg snapshot_name (string): Name of the snapshot to restore.
+		:arg wait_for_completion (boolean): Whether or not to wait for the snapshot restore to complete.
+		"""
+		conn_es.snapshot.restore(repository = repository_name, snapshot = snapshot_name, wait_for_completion = wait_for_completion)
+
+
+	def mountSearchableSnapshot(self, conn_es, repository_name, snapshot_name, wait_for_completion):
+		"""
+		Method that mounts a snapshot as a searchable snapshot.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Name of the repository where the snapshot is stored.
+		:arg snapshot_name (string): Name of the snapshot to mount.
+		:arg wait_for_completion (boolean): Whether or not to wait for the snapshot mount to complete.
+		"""
+		conn_es.searchable_snapshots.mount(repository = repository_name, snapshot = snapshot_name, body = {"index" : snapshot_name}, wait_for_completion = wait_for_completion, request_timeout = 7200)
+
+
+	def deleteSnapshot(self, conn_es, repository_name, snapshot_name):
+		"""
+		Method that deletes an ElasticSearch snapshot.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg repository_name (string): Name of the repository where the snapshot is stored.
+		:arg snapshot_name (string): Name of the snapshot to delete.
+		"""
+		conn_es.snapshot.delete(repository = repository_name, snapshot = snapshot_name, request_timeout = 7200)
+
+
 	def getIndexes(self, conn_es):
 		"""
-		Method that gets all indexes stored in ElasticSearch.
+		Method that obtains a list with the names of the ElasticSearch indexes.
 		
-		Returns the list with all indexes founded.
+		Returns the list with the names of the indexes.
 
 		:arg conn_es (object): Object that contains a connection to ElasticSearch.
 		"""
 		list_all_indexes = conn_es.indices.get('*')
 		list_all_indexes = sorted([index for index in list_all_indexes if not index.startswith('.')])
 		return list_all_indexes
+
+
+	def deleteIndex(self, conn_es, index_name):
+		"""
+		Method that removes an ElasticSearch index.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		:arg index_name (string): Name of the index to delete.
+		"""
+		conn_es.indices.delete(index = index_name)
+
+
+	def getNodesInformation(self, conn_es):
+		"""
+		Method that obtains the information from the ElasticSearch nodes.
+		
+		Returns an object with the information of the nodes.
+
+		:arg conn_es (object): Object that contains a connection to ElasticSearch.
+		"""
+		es_nodes_info = conn_es.nodes.stats(metric = "fs")["nodes"]
+		return es_nodes_info
 
 
 	def generateTelegramMessagewithElasticData(self, hit):
@@ -362,4 +507,4 @@ class libPyElk:
 									if not (type(hit[str(hits)][str(hits_two)][str(hits_three)][str(hits_four)]) is utils.AttrDict):
 										list_to_hit.append(str(hit[str(hits)][str(hits_two)][str(hits_three)]))
 			list_to_data.append(list_to_hit)
-		return list_to_data			
+		return list_to_data
