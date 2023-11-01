@@ -11,7 +11,7 @@ Easy integration of ElasticSearch with Python applications.
   - When using the SSL/TLS protocol, the option to verify or not verify the SSL certificate can be used. It's recommended to use the option to verify the SSL certificate, for security reasons.
 - Create a Search object
 - Performs a search in ElasticSearch using Query String.
-- Performs a search in ElasticSearch using Query String and an Aggregations.
+- Performs a search in ElasticSearch using Query String and Aggregations.
 - Generates a Telegram message based on the result of a search in ElasticSearch.
 
 # Requirements
