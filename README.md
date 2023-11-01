@@ -21,6 +21,7 @@ Easy integration of ElasticSearch with Python applications.
   - requests == 2.31.0
   - elasticsearch == 7.17.9
   - elasticsearch-dsl == 7.4.1
+  - libPyUtils 1.2 (https://github.com/erickrr-bd/libPyUtils)
     
 **NOTE:** The versions displayed are the versions with which it was tested. This doesn't mean that versions older than these don't work. This library doesn't work with versions 8.x of the Python ElasticSearch Client.
 
