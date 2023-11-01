@@ -8,112 +8,141 @@ class libPyElk:
 
 	def __init__(self):
 		"""
-		Method that corresponds to the constructor of the class.
+		Class constructor.
 		"""
-		self.__utils = libPyUtils()
+		self.utils = libPyUtils()
 		self.exceptions = exceptions
 		simplefilter("ignore", self.exceptions.ElasticsearchWarning)
 
 
-	def createConnectionToElasticSearchWithoutAuthentication(self, data_configuration):
+	def createConnectionWithoutAuthentication(self, configuration_data):
 		"""
-		Method that creates a connection to ElasticSearch without authentication from data stored in a YAML file.
-
-		Returns an object containing a connection to ElasticSearch.
+		Method that creates a connection with ElasticSearch without authentication.
 		
-		:arg data_configuration (dict): Object that contains the data obtained from a YAML file.
+		Returns a straightforward mapping from Python to ES REST endpoints.
+		
+		:arg configuration_data (dict): Dictionary that stores configuration data.
 		"""
-		if data_configuration["use_ssl_tls"] == False:	
-			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], use_ssl = data_configuration["use_ssl_tls"])
-		else:
-			if data_configuration["verificate_certificate_ssl"] == False:
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_show_warn = False)
+		if configuration_data["use_ssl_tls"]:
+			if configuration_data["verificate_certificate_ssl"]:
+				context = create_default_context(cafile = configuration_data["certificate_file_path"])
+				conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], connection_class = RequestsHttpConnection, use_ssl = configuration_data["use_ssl_tls"], verify_certs = configuration_data["verificate_certificate_ssl"], ssl_context = context)
 			else:
-				context = create_default_context(cafile = data_configuration["path_certificate_file"])
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_context = context)
+				conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], connection_class = RequestsHttpConnection, use_ssl = configuration_data["use_ssl_tls"], verify_certs = configuration_data["verificate_certificate_ssl"], ssl_show_warn = False)
+		else:
+			conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], use_ssl = configuration_data["use_ssl_tls"])
 		return conn_es
 
 
-	def createConnectionToElasticSearch(self, data_configuration, **kwargs):
+	def createConnectionHTTPAuthentication(self, configuration_data, key_file_path):
 		"""
-		Method that creates a connection with ElasticSearch from data stored in a YAML file.
+		Method that creates a connection with ElasticSearch using HTTP authentication.
 
-		Returns an object containing a connection to ElasticSearch.
-		
-		:arg data_configuration (dict): Object that contains the data obtained from a YAML file.
+		Returns a straightforward mapping from Python to ES REST endpoints.
+
+		:arg configuration_data (dict): Dictionary that stores configuration data.
+		:arg key_file_path (string): Absolute path of the file containing the encryption key.
+		"""
+		passphrase = self.utils.getPassphraseKeyFromFile(key_file_path)
+		http_authentication_user = self.utils.decryptDataWithAES(configuration_data["http_authentication_user"], passphrase)
+		http_authentication_password = self.utils.decryptDataWithAES(configuration_data["http_authentication_password"], passphrase)
+		if configuration_data["use_ssl_tls"]:
+			if configuration_data["verificate_certificate_ssl"]:
+				context = create_default_context(cafile = configuration_data["certificate_file_path"])
+				conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], http_auth = (http_authentication_user, http_authentication_password), connection_class = RequestsHttpConnection, use_ssl = configuration_data["use_ssl_tls"], verify_certs = configuration_data["verificate_certificate_ssl"], ssl_context = context)
+			else:
+				conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], http_auth = (http_authentication_user, http_authentication_password), connection_class = RequestsHttpConnection, use_ssl = configuration_data["use_ssl_tls"], verify_certs = configuration_data["verificate_certificate_ssl"], ssl_show_warn = False)
+		else:
+			conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], http_auth = (http_authentication_user, http_authentication_password), use_ssl = configuration_data["use_ssl_tls"])
+		return conn_es
+
+
+	def createConnectionAPIKey(self, configuration_data, key_file_path):
+		"""
+		Method that creates a connection with ElasticSearch using API Key.
+
+		Returns a straightforward mapping from Python to ES REST endpoints.
+
+		:arg configuration_data (dict): Dictionary that stores configuration data.
+		:arg key_file_path (string): Absolute path of the file containing the encryption key.
+		"""
+		passphrase = self.utils.getPassphraseKeyFromFile(key_file_path)
+		api_key_id = self.utils.decryptDataWithAES(configuration_data["api_key_id"], passphrase)
+		api_key = self.utils.decryptDataWithAES(configuration_data["api_key"], passphrase)
+		if configuration_data["use_ssl_tls"]:
+			if configuration_data["verificate_certificate_ssl"]:
+				context = create_default_context(cafile = configuration_data["certificate_file_path"])
+				conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], api_key = (api_key_id, api_key), connection_class = RequestsHttpConnection, use_ssl = configuration_data["use_ssl_tls"], verify_certs = configuration_data["verificate_certificate_ssl"], ssl_context = context)
+			else:
+				conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], api_key = (api_key_id, api_key), connection_class = RequestsHttpConnection, use_ssl = configuration_data["use_ssl_tls"], verify_certs = configuration_data["verificate_certificate_ssl"], ssl_show_warn = False)
+		else:
+			conn_es = Elasticsearch(configuration_data["es_host"], port = configuration_data["es_port"], api_key = (api_key_id, api_key), use_ssl = configuration_data["use_ssl_tls"])
+		return conn_es
+
+
+	def createSearch(self, conn_es, index_pattern):
+		"""
+		Method that creates a Search object.
+
+		Returns a Search object.
+
+		:arg conn_es (Object): Object with the connection to ElasticSearch.
+		:arg index_pattern (string): Name of the index or index pattern.
+		"""
+		search = Search(index = index_pattern).using(conn_es).params(request_timeout = 30)
+		search = search[0:10000]
+		return search
+
+
+	def searchByQueryString(self, search, query_string, gte, lte, use_fields_selection, **kwargs):
+		"""
+		Method that performs a search in ElasticSearch using Query String
+
+		Returns results matching a query.
+
+		:arg search (Object): Search Object.
+		:arg query_string (string): Query String that defines the event search.
+		:arg gte (string): Date math for the gte value.
+		:arg lte (string): Date math for the lte value.
+		:arg use_fields_selection (boolean): Whether or not the option to select certain fields is going to be used.
 
 		Keyword Args:
-        	:arg path_key_file (string): Absolute path where the key file is located.
+        	:arg fields (list): List with field names.
 		"""
-		if data_configuration["use_ssl_tls"] == False and data_configuration["use_http_authentication"] == False:
-			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, use_ssl = data_configuration["use_ssl_tls"])
-		if data_configuration["use_ssl_tls"] == False and data_configuration["use_http_authentication"] == True:
-			passphrase = self.__utils.getPassphraseKeyFile(kwargs["path_key_file"])
-			user_http_authentication = self.__utils.decryptDataWithAES(data_configuration["user_http_authentication"], passphrase).decode("utf-8")
-			password_http_authentication = self.__utils.decryptDataWithAES(data_configuration["password_http_authentication"], passphrase).decode("utf-8")
-			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"])
-		if data_configuration["use_ssl_tls"] == True and data_configuration["use_http_authentication"] == False:
-			if data_configuration["validate_certificate_ssl"] == False:
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["validate_certificate_ssl"], ssl_show_warn = False)
-			else:
-				context = create_default_context(cafile = data_configuration["path_certificate_file"])
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["validate_certificate_ssl"], ssl_context = context)
-		if data_configuration["use_ssl_tls"] == True and data_configuration["use_http_authentication"]:
-			passphrase = self.__utils.getPassphraseKeyFile(kwargs["path_key_file"])
-			user_http_authentication = self.__utils.decryptDataWithAES(data_configuration["user_http_authentication"], passphrase).decode("utf-8")
-			password_http_authentication = self.__utils.decryptDataWithAES(data_configuration["password_http_authentication"], passphrase).decode("utf-8")
-			if data_configuration["validate_certificate_ssl"] == False:
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["validate_certificate_ssl"], ssl_show_warn = False)
-			else:
-				context = create_default_context(cafile = data_configuration["path_certificate_file"])
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["validate_certificate_ssl"], ssl_context = context)
-		return conn_es
-
-
-	def createConnectionToElasticSearchHTTPAuthentication(self, data_configuration, path_key_file):
-		"""
-		Method that creates a connection to ElasticSearch using HTTP authentication from data stored in a YAML file.
-
-		Returns an object containing a connection to ElasticSearch.
-		
-		:arg data_configuration (dict): Object that contains the data obtained from a YAML file.
-		:arg path_key_file (string): Absolute path of the file where the passphrase for the encryption/decryption process is located.
-		"""
-		passphrase = self.__utils.getPassphraseKeyFile(path_key_file)
-		user_http_authentication = self.__utils.decryptDataWithAES(data_configuration["user_http_authentication"], passphrase).decode("utf-8")
-		password_http_authentication = self.__utils.decryptDataWithAES(data_configuration["password_http_authentication"], passphrase).decode("utf-8")
-		if data_configuration["use_ssl_tls"] == False:	
-			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"])
+		es_query_string = Q("query_string", query = query_string)
+		if use_fields_selection:
+			search_query_string = search.query(es_query_string).query("range", **{"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields_name"])
 		else:
-			if data_configuration["verificate_certificate_ssl"] == False:
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_show_warn = False)
-			else:
-				context = create_default_context(cafile = data_configuration["path_certificate_file"])
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, http_auth = (user_http_authentication, password_http_authentication), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_context = context)
-		return conn_es
+			search_query_string = search.query(es_query_string).query("range", **{"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = None)
+		result = search_query_string.execute()
+		return result
 
 
-	def createConnectionToElasticSearchAPIKey(self, data_configuration, path_key_file):
+	def searchByQueryStringAggregation(self, search, query_string, gte, lte, field, use_fields_selection, **kwargs):
 		"""
-		Method that creates a connection to ElasticSearch using API key authentication from data stored in a YAML file.
-
-		Returns an object containing a connection to ElasticSearch.
+		Method that performs a search in ElasticSearch using Query String and an Aggregation.
 		
-		:arg data_configuration (dict): Object that contains the data obtained from a YAML file.
-		:arg path_key_file (string): Absolute path of the file where the passphrase for the encryption/decryption process is located.
+		Returns results matching a query.
+
+		:arg search (Object): Search Object.
+		:arg query_string (string): Query String that defines the event search.
+		:arg gte (string): Date math for the gte value.
+		:arg lte (string): Date math for the lte value.
+		:arg field (string): Name of the field to be used for the aggregation.
+		:arg use_fields_selection (boolean): Whether or not the option to select certain fields is going to be used.
+
+		Keyword Args:
+        	:arg fields (list): List with field names.
 		"""
-		passphrase = self.__utils.getPassphraseKeyFile(path_key_file)
-		api_key_id = self.__utils.decryptDataWithAES(data_configuration["api_key_id"], passphrase).decode("utf-8")
-		api_key = self.__utils.decryptDataWithAES(data_configuration["api_key"], passphrase).decode("utf-8")
-		if data_configuration["use_ssl_tls"] == False:	
-			conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], api_key = (api_key_id, api_key), use_ssl = data_configuration["use_ssl_tls"])
+		es_query_string = Q("query_string", query = query_string)
+		if use_fields_selection:
+			search_query_string = search.query(es_query_string).query("range", **{"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields_name"])
 		else:
-			if data_configuration["verificate_certificate_ssl"] == False:
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, api_key = (api_key_id, api_key), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_show_warn = False)
-			else:
-				context = create_default_context(cafile = data_configuration["path_certificate_file"])
-				conn_es = Elasticsearch(data_configuration["es_host"], port = data_configuration["es_port"], connection_class = RequestsHttpConnection, api_key = (api_key_id, api_key), use_ssl = data_configuration["use_ssl_tls"], verify_certs = data_configuration["verificate_certificate_ssl"], ssl_context = context)
-		return conn_es
+			search_query_string = search.query(es_query_string).query("range", **{"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = None)
+		aggregation = A("terms", field = field, size = 10000)
+		search_query_string.aggs.bucket("events", aggregation)
+		result = search_query_string.execute()
+		return result
 
 
 	def createDocumentInIndex(self, conn_es, index_name, body_data):
@@ -125,71 +154,6 @@ class libPyElk:
 		:arg body_data (JSON): JSON object with the data that will be inserted in ElasticSearch.
 		"""
 		conn_es.index(index = index_name, body = body_data)
-
-
-	def createSearchObject(self, conn_es, index_pattern_name):
-		"""
-		Method that creates a Search type Object in ElasticSearch.
-
-		Returns a Search type object in ElasticSearch.
-
-		:arg conn_es (object): Object that contains a connection to ElasticSearch.
-		:arg index_pattern_name (string): Index pattern name where the search is performed.
-		"""
-		search_in_elastic = Search(index = index_pattern_name).using(conn_es).params(request_timeout = 30)
-		search_in_elastic = search_in_elastic[0:10000]
-		return search_in_elastic
-
-
-	def executeSearchQueryString(self, search_in_elastic, gte, lte, query_string, use_fields_option, **kwargs):
-		"""
-		Method that performs a search in ElasticSearch using Query String.
-
-		Returns an object with the search result.
-		
-		:arg search_in_elastic (object): Search type object in ElasticSearch.
-		:arg gte (string): Gte using to define the time range for the search in ElasticSearch.
-		:arg lte (string): Lte using to define the time range for the search in ElasticSearch.
-		:arg query_string (string): Query String with which the search is performed in ElasticSearch.
-		:arg use_fields_option (boolean): Whether or not to use the option to use fields.
-		
-		Keyword Args:
-        	:arg fields (list): Names of the fields that will be returned by the search in ElasticSearch.
-		"""
-		query_string_to_elastic = Q("query_string", query = query_string)
-		if use_fields_option == True:
-			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query("range", ** {"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields"])
-		else:
-			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query("range", ** {"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = None)
-		result_search = search_to_elastic.execute()
-		return result_search
-
-
-	def executeSearchQueryStringWithAggregation(self, search_in_elastic, field_name, gte, lte, query_string, use_fields_option, **kwargs):
-		"""
-		Method that performs a search in ElasticSearch using Query String and an Aggregation.
-		
-		Returns an object with the search result.
-
-		:arg search_in_elastic (object): Search type object in ElasticSearch.
-		:arg field_name (string): Field"s name that be used for the Aggregation.
-		:arg gte (string): Gte using to define the time range for the search in ElasticSearch.
-		:arg lte (string): Lte using to define the time range for the search in ElasticSearch.
-		:arg query_string (string): Query String with which the search is performed in ElasticSearch.
-		:arg use_fields_option (boolean): Whether or not to use the option to use fields.
-
-		Keyword Args:
-        	:arg fields (list): Names of the fields that will be returned by the search in ElasticSearch.
-		"""
-		query_string_to_elastic = Q("query_string", query = query_string)
-		if use_fields_option == True:
-			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query("range", ** {"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields"])
-		else:
-			search_to_elastic = search_in_elastic.query(query_string_to_elastic).query("range", ** {"@timestamp" : {"gte" : gte, "lte" : lte}}).source(fields = None)
-		aggregation = A("terms", field = field_name, size = 10000)
-		search_to_elastic.aggs.bucket("events", aggregation)
-		result_search = search_to_elastic.execute()
-		return result_search
 
 
 	def executeSearchWithAggregation(self, search_in_elastic, field_name_in_index, gte, lte):
@@ -426,32 +390,32 @@ class libPyElk:
 		return es_nodes_info
 
 
-	def generateTelegramMessagewithElasticData(self, hit):
+	def generateDataTelegramMessage(self, hit):
 		"""
-		Method that generates the telegram message based on data from ElasticSearch .
+		Method that generates a Telegram message based on the result of a search in ElasticSearch.
 
-		Returns the message to be sent via Telegram.
+		RReturns a Telegram message.
 
-		:arg hit (object): Object that contains the ElasticSearch Data.
+		:arg hit (object): Object that contains the search data in ElasticSearch.
 		"""
-		message_telegram = ""
+		telegram_message = ""
 		for hits in hit:
 			if not (type(hit[str(hits)]) is utils.AttrDict):
-				message_telegram += u"\u2611\uFE0F" + " " + hits + " = " + str(hit[str(hits)]) + "\n"
+				telegram_message += u"\u2611\uFE0F" + ' ' + hits + " = " + str(hit[str(hits)]) + '\n'
 			else:
 				for hits_two in hit[str(hits)]:
 					if not (type(hit[str(hits)][str(hits_two)]) is utils.AttrDict):
-						message_telegram += u"\u2611\uFE0F" + " " + hits + "." + hits_two + " = " + str(hit[str(hits)][str(hits_two)]) + "\n"
+						telegram_message += u"\u2611\uFE0F" + ' ' + hits + '.' + hits_two + " = " + str(hit[str(hits)][str(hits_two)]) + '\n'
 					else:
 						for hits_three in hit[str(hits)][str(hits_two)]:
 							if not (type(hit[str(hits)][str(hits_two)][str(hits_three)]) is utils.AttrDict):
-								message_telegram += u"\u2611\uFE0F" + " " + hits + "." + hits_two + "." + hits_three + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + "\n"
+								telegram_message += u"\u2611\uFE0F" + ' ' + hits + '.' + hits_two + '.' + hits_three + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
 							else:
 								for hits_four in hit[str(hits)][str(hits_two)][str(hits_three)]:
 									if not (type(hit[str(hits)][str(hits_two)][str(hits_three)][str(hits_four)]) is utils.AttrDict):
-										message_telegram += u"\u2611\uFE0F" + " " + hits + "." + hits_two + "." + hits_three + "." + hits_four + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + "\n"
-		message_telegram += "\n\n"
-		return message_telegram
+										telegram_message += u"\u2611\uFE0F" + ' ' + hits + '.' + hits_two + '.' + hits_three + '.' + hits_four + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
+		telegram_message += "\n\n"
+		return telegram_message
 
 
 	def getFieldsofElasticData(self, hit):
