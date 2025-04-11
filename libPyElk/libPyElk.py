@@ -97,7 +97,7 @@ class libPyElk:
 		Returns:
 			result: Search result.
 		"""
-		es_search = Search(using = conn_es, index = index_pattern)
+		es_search = Search(using = conn_es, index = index_pattern).params(request_timeout = 60)
 		es_search = es_search[0:10000]
 		es_query_string = Q("query_string", query = query_string)
 		if use_fields:
@@ -136,3 +136,15 @@ class libPyElk:
 										message += u"\u2611\uFE0F" + ' ' + hits + '.' + hits_two + '.' + hits_three + '.' + hits_four + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
 		message += "\n\n"
 		return message
+
+
+	def add_new_document(self, conn_es: Elasticsearch, index_name: str, data: dict) -> None:
+		"""
+		Method that adds a new document to an index.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_name (str): Name of the index where the new document will be added.
+			data (dict): Dictionary with the data to be added to the new document.
+		"""
+		conn_es.index(index = index_name, body = data)
