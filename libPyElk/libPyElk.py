@@ -2,7 +2,8 @@
 Author: Erick Roberto Rodriguez Rodriguez
 Email: erodriguez@tekium.mx, erickrr.tbd93@gmail.com
 GitHub: https://github.com/erickrr-bd/libPyElk
-libPyElk v2.2 - March 2025
+libPyElk v2.2 - August 2025
+A lightweight Python library for managing Elasticsearch tasks.
 """
 from libPyUtils import libPyUtils
 from elasticsearch import Elasticsearch
@@ -12,9 +13,6 @@ from libPyConfiguration import libPyConfiguration
 
 @dataclass
 class libPyElk:
-	"""
-	Easy integration of ElasticSearch with Python applications. 
-	"""
 
 	utils: libPyUtils = field(default_factory = libPyUtils)
 
@@ -24,15 +22,15 @@ class libPyElk:
 		Method that creates a connection to ElasticSearch without authentication.
 
 		Parameters:
-			configuration (libPyConfiguration): Object with the configuration to create the connection with ElasticSearch.
+			configuration (libPyConfiguration): libPyConfiguration's Object.
 
 		Returns:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 		"""
 		if configuration.verificate_certificate_ssl:
-			conn_es = Elasticsearch(hosts = configuration.es_host, verify_certs = True, ca_certs = configuration.certificate_file)
+			conn_es = Elasticsearch(hosts = configuration.es_host, verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
 		else:
-			conn_es = Elasticsearch(hosts = configuration.es_host, verify_certs = False, ssl_show_warn = False)
+			conn_es = Elasticsearch(hosts = configuration.es_host, verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
 		return conn_es
 
 
@@ -41,7 +39,7 @@ class libPyElk:
 		Method that creates a connection to ElasticSearch using HTTP authentication.
 
 		Parameters:
-			configuration (libPyConfiguration): Object with the configuration to create the connection with ElasticSearch.
+			configuration (libPyConfiguration): libPyConfiguration's Object.
 			key_file (str): Key file path. 
 
 		Returns:
@@ -51,9 +49,9 @@ class libPyElk:
 		http_authentication_user = self.utils.decrypt_data(configuration.http_authentication_user, passphrase).decode("utf-8")
 		http_authentication_password = self.utils.decrypt_data(configuration.http_authentication_password, passphrase).decode("utf-8")
 		if configuration.verificate_certificate_ssl:
-			conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = True, ca_certs = configuration.certificate_file)
+			conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
 		else:
-			conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = False, ssl_show_warn = False)
+			conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
 		return conn_es
 
 
@@ -62,7 +60,7 @@ class libPyElk:
 		Method that creates a connection to ElasticSearch using API Key.
 
 		Parameters:
-			configuration (libPyConfiguration): Object with the configuration to create the connection with ElasticSearch.
+			configuration (libPyConfiguration): libPyConfiguration's Object.
 			key_file (str): Key file path. 
 
 		Returns:
@@ -72,13 +70,13 @@ class libPyElk:
 		api_key_id = self.utils.decrypt_data(configuration.api_key_id, passphrase).decode("utf-8")
 		api_key = self.utils.decrypt_data(configuration.api_key, passphrase).decode("utf-8")
 		if configuration.verificate_certificate_ssl:
-			conn_es = Elasticsearch(hosts = configuration.es_host, api_key  = (api_key_id, api_key), verify_certs = True, ca_certs = configuration.certificate_file)
+			conn_es = Elasticsearch(hosts = configuration.es_host, api_key  = (api_key_id, api_key), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
 		else:
-			conn_es = Elasticsearch(hosts = configuration.es_host, api_key  = (api_key_id, api_key), verify_certs = False, ssl_show_warn = False)
+			conn_es = Elasticsearch(hosts = configuration.es_host, api_key  = (api_key_id, api_key), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
 		return conn_es
 
 
-	def search_query_string(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte_date: str, lte_date: str, use_fields: bool, **kwargs):
+	def search_query_string(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str, use_fields: bool, **kwargs):
 		"""
 		Method that searches data in ElasticSearch using query string.
 
@@ -86,10 +84,10 @@ class libPyElk:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 			index_pattern (str): Index or index pattern where the search will be performed.
 			query_string (str): Query string to be used for the search.
-			timestamp_field (str): Name of the field that corresponds to the index timestamp.
-			gte_date (str): Mayor o igual al rango definido.
-			lte_date (str): Menor o igual al rango definido.
-			use_fields (bool): Whether or not to use the option to return certain fields in the search result.
+			timestamp_field (str): Field's name that corresponds to the index timestamp.
+			gte (str): Greater than or equal to the defined range.
+			lte (str): Less than or equal to the defined range.
+			use_fields (bool): If true, it limits the search result to specific fields, otherwise it returns all the fields in the document.
 
 		Keyword Args:
 			fields (list): List with field's names.
@@ -97,23 +95,23 @@ class libPyElk:
 		Returns:
 			result: Search result.
 		"""
-		es_search = Search(using = conn_es, index = index_pattern).params(request_timeout = 60)
+		es_search = Search(using = conn_es, index = index_pattern)
 		es_search = es_search[0:10000]
 		es_query_string = Q("query_string", query = query_string)
 		if use_fields:
-			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte_date, "lte" : lte_date}}).source(fields = kwargs["fields"])
+			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields"])
 		else:
-			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte_date, "lte" : lte_date}}).source(fields = None)
+			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
 		result = search_qs.execute()
 		return result
 
 
-	def convert_data_to_str(self, hit) -> str:
+	def convert_data_to_str(self, hit: dict) -> str:
 		"""
-		Method that converts ElasticSearch data to a string.
+		MMethod that converts an Elastic document into a string.
 
 		Parameters:
-			hit: Data corresponding to the search result in ElasticSearch.
+			hit (dict): Object that contains the document data.
 
 		Returns:
 			message (str): String obtained from the conversion.
