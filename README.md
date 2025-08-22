@@ -5,8 +5,8 @@ A lightweight Python library for managing Elasticsearch operations with ease.
 ## Features
 - Connect to local or remote Elasticsearch clusters
   - Connect to local or remote Elasticsearch clusters without authentication method.
-  - Connect to local or remote Elasticsearch clusters using HTTP Authentication as the authentication method.
-  - Connect to local or remote Elasticsearch clusters using API Key as an authentication method.
+  - Connect to local or remote Elasticsearch clusters using HTTP Authentication.
+  - Connect to local or remote Elasticsearch clusters using API Key.
   - Connect to local or remote Elasticsearch clusters using the SSL/TLS protocol.
   - Connect to local or remote Elasticsearch clusters verifying the SSL certificate.
 - Create and manage indices.
