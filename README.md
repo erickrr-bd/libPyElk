@@ -1,34 +1,32 @@
 # libPyElk v2.2
 
-A lightweight Python library for managing Elasticsearch tasks.
+A lightweight Python library for managing Elasticsearch operations with ease.
 
-## Utilities
-- Create connection to the ElasticSearch cluster based on a defined configuration file.
-  - Create connection to the ElasticSearch cluster without authentication method.
-  - Create connection to the ElasticSearch cluster using HTTP Authentication as the authentication method.
-  - Create connection to the ElasticSearch cluster using API Key as an authentication method.
-  - The connection can be created using or not using the SSL/TLS protocol. It's recommended to use the SSL/TLS protocol for security reasons.
-  - When using the SSL/TLS protocol, the option to verify or not verify the SSL certificate can be used. It's recommended to use the option to verify the SSL certificate, for security reasons.
-- Create a Search object
-- Performs a search in ElasticSearch using Query String.
-- Performs a search in ElasticSearch using Query String and Aggregations.
-- Generates a Telegram message based on the result of a search in ElasticSearch.
+## Features
+- Connect to local or remote Elasticsearch clusters
+  - Connect to local or remote Elasticsearch clusters without authentication method.
+  - Connect to local or remote Elasticsearch clusters using HTTP Authentication as the authentication method.
+  - Connect to local or remote Elasticsearch clusters using API Key as an authentication method.
+  - Connect to local or remote Elasticsearch clusters using the SSL/TLS protocol.
+  - Connect to local or remote Elasticsearch clusters verifying the SSL certificate.
+- Create and manage indices.
+- Insert and query documents.
+- Search using Query String.
+- Converts a document to a string.
 
-# Requirements
-- CentOS 8, Red Hat 8 or Rocky Linux 8
-- Python 3.9
+## Requirements
+- Red Hat 8 or Rocky Linux 8
+- Elasticsearch 7.x or 8.x
+- Python 3.12
 - Python Libraries
-  - requests == 2.31.0
-  - elasticsearch == 7.17.9
-  - elasticsearch-dsl == 7.4.1
-  - libPyUtils v1.2 (https://github.com/erickrr-bd/libPyUtils)
-    
-**NOTE:** The versions displayed are the versions with which it was tested. This doesn't mean that versions older than these don't work. This library doesn't work with versions 8.x of the Python ElasticSearch Client.
+  - elasticsearch
+  - elasticsearch-dsl
+  - libPyUtils v2.2 (https://github.com/erickrr-bd/libPyUtils)
 
-# Installation
+## Installation
 
 Copy the "libPyElk" folder to the following path:
 
-`/usr/local/lib/python3.9/site-packages`
+`/usr/local/lib/python3.12/site-packages`
 
 **NOTE:** The path depends on the Python version.
