@@ -1,6 +1,6 @@
-# libPyElk v1.2
+# libPyElk v2.2
 
-Easy integration of ElasticSearch with Python applications.
+A lightweight Python library for managing Elasticsearch tasks.
 
 ## Utilities
 - Create connection to the ElasticSearch cluster based on a defined configuration file.
