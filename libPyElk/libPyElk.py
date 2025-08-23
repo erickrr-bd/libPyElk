@@ -3,7 +3,7 @@ Author: Erick Roberto Rodriguez Rodriguez
 Email: erodriguez@tekium.mx, erickrr.tbd93@gmail.com
 GitHub: https://github.com/erickrr-bd/libPyElk
 libPyElk v2.2 - August 2025
-A lightweight Python library for managing Elasticsearch tasks.
+A lightweight Python library for managing Elasticsearch operations with ease.
 """
 from libPyUtils import libPyUtils
 from elasticsearch import Elasticsearch
