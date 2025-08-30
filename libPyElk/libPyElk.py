@@ -5,11 +5,13 @@ GitHub: https://github.com/erickrr-bd/libPyElk
 libPyElk v2.2 - August 2025
 A lightweight Python library for managing Elasticsearch operations with ease.
 """
+import os
 from libPyUtils import libPyUtils
 from elasticsearch import Elasticsearch
 from dataclasses import dataclass, field
 from elasticsearch_dsl import Search, Q, utils
 from libPyConfiguration import libPyConfiguration
+from concurrent.futures import ThreadPoolExecutor
 
 @dataclass
 class libPyElk:
@@ -142,7 +144,66 @@ class libPyElk:
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
-			index_name (str): Name of the index where the new document will be added.
+			index_name (str): Index's name where the new document will be added.
 			data (dict): Dictionary with the data to be added to the new document.
 		"""
 		conn_es.index(index = index_name, body = data)
+
+
+	def get_indexes(self, conn_es:  Elasticsearch) -> list:
+		"""
+		Method that obtains the indexes stored in ElasticSearch. Excludes system indexes.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+
+		Returns:
+			indexes (list): All indexes' list.
+		"""
+		indexes = conn_es.indices.get(index = '*')
+		indexes = sorted([index for index in indexes if not index.startswith('.')])
+		return indexes
+
+
+	def validate_document(self, document: dict) -> list:
+		"""
+		Method that validates the document's integrity. Validates if the document version is greater than 1.
+
+		Parameters:
+			document (dict): Document to validate.
+
+		Returns:
+			documents (list): Documents' list whose version is greater than 1.
+		"""
+		documents = []
+		if document["_version"] > 1:
+			documents.append((document["_index"], document["_id"], document["_version"]))
+		return documents
+
+
+	def validate_index_integrity(self, conn_es: Elasticsearch, index_name: str) -> list:
+		"""
+		Method that validates the integrity of a specific index's documents.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_name (str): Index to validate.
+
+		Returns:
+			documents (list): Modified or altered documents' list.
+		"""
+		documents = []
+		body = {"query" : {"match_all" : {}}}
+		response = conn_es.search(index = index_name, body = body, scroll = "2m", size = 1000, version = True)
+		scroll_id = response["_scroll_id"]
+		hits = response["hits"]["hits"]
+		while hits:
+			with ThreadPoolExecutor(max_workers = os.cpu_count() * 2) as executor:
+				results = list(executor.map(self.validate_document, hits))
+				for item in results:
+					documents.extend(item)
+			response = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
+			scroll_id = response["_scroll_id"]
+			hits = response["hits"]["hits"]
+		conn_es.clear_scroll(scroll_id = scroll_id)
+		return documents
