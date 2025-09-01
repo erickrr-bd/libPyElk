@@ -2,7 +2,7 @@
 Author: Erick Roberto Rodriguez Rodriguez
 Email: erodriguez@tekium.mx, erickrr.tbd93@gmail.com
 GitHub: https://github.com/erickrr-bd/libPyElk
-libPyElk v2.2 - August 2025
+libPyElk v2.2 - September 2025
 A lightweight Python library for managing Elasticsearch operations with ease.
 """
 import os
@@ -197,13 +197,44 @@ class libPyElk:
 		response = conn_es.search(index = index_name, body = body, scroll = "2m", size = 1000, version = True)
 		scroll_id = response["_scroll_id"]
 		hits = response["hits"]["hits"]
-		while hits:
-			with ThreadPoolExecutor(max_workers = os.cpu_count() * 2) as executor:
+		with ThreadPoolExecutor(max_workers = os.cpu_count() * 2) as executor:
+			while hits:
 				results = list(executor.map(self.validate_document, hits))
 				for item in results:
 					documents.extend(item)
-			response = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
-			scroll_id = response["_scroll_id"]
-			hits = response["hits"]["hits"]
+				response = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
+				scroll_id = response["_scroll_id"]
+				hits = response["hits"]["hits"]
+		conn_es.clear_scroll(scroll_id = scroll_id)
+		return documents
+
+
+	def validate_index_pattern_integrity(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, gte: str, lte: str) -> list:
+		"""
+		Method that validates the index pattern's integrity in a time range.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_pattern (str): Index Pattern to validate.
+			timestamp_field (str): Field's name that corresponds to the index timestamp.
+			gte (str): Greater than or equal to the defined range.
+			lte (str): Less than or equal to the defined range.
+
+		Returns:
+			documents (list): Modified or altered documents' list.
+		"""
+		documents = []
+		body = {"query" : {"bool" : {"must" : [{"range" : {timestamp_field : {"gte" : gte, "lte" : lte}}},{"match_all" : {}}]}}}
+		response = conn_es.search(index = index_pattern, body = body, scroll = "2m", size = 1000, version = True)
+		scroll_id = response["_scroll_id"]
+		hits = response["hits"]["hits"]
+		with ThreadPoolExecutor(max_workers = os.cpu_count() * 2)  as executor:
+			while hits:
+				results = list(executor.map(self.validate_document, hits))
+				for item in results:
+					documents.extend(item)
+				response = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
+				scroll_id = response["_scroll_id"]
+				hits = response["hits"]["hits"]
 		conn_es.clear_scroll(scroll_id = scroll_id)
 		return documents
