@@ -9,7 +9,7 @@ import os
 from libPyUtils import libPyUtils
 from elasticsearch import Elasticsearch
 from dataclasses import dataclass, field
-from elasticsearch_dsl import Search, Q, utils
+from elasticsearch_dsl import Search, Q, A, utils
 from libPyConfiguration import libPyConfiguration
 from concurrent.futures import ThreadPoolExecutor
 
@@ -104,6 +104,39 @@ class libPyElk:
 			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields"])
 		else:
 			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
+		result = search_qs.execute()
+		return result
+
+
+	def search_query_string_aggregation(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str, field_name: str, use_fields: bool, **kwargs):
+		"""
+		Method that searches data in ElasticSearch using query string and aggregations.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_pattern (str): Index or index pattern where the search will be performed.
+			query_string (str): Query string to be used for the search.
+			timestamp_field (str): Field's name that corresponds to the index timestamp.
+			gte (str): Greater than or equal to the defined range.
+			lte (str): Less than or equal to the defined range.
+			field_name (str): Field's name to be used for the aggregation.
+			use_fields (bool): If true, it limits the search result to specific fields, otherwise it returns all the fields in the document.
+
+		Keyword Args:
+			fields (list): List with field's names.
+
+		Returns:
+			result: Search result.
+		"""
+		es_search = Search(using = conn_es, index = index_pattern)
+		es_search = es_search[0:10000]
+		es_query_string = Q("query_string", query = query_string)
+		if use_fields:
+			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields"])
+		else:
+			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
+		aggregation = A("terms", field = field_name, size = 10000)
+		es_search.aggs.bucket("events", aggregation)
 		result = search_qs.execute()
 		return result
 
