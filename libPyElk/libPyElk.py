@@ -2,7 +2,7 @@
 Author: Erick Roberto Rodriguez Rodriguez
 Email: erodriguez@tekium.mx, erickrr.tbd93@gmail.com
 GitHub: https://github.com/erickrr-bd/libPyElk
-libPyElk v2.2 - September 2025
+libPyElk v2.2 - November 2025
 A lightweight Python library for managing Elasticsearch operations with ease.
 """
 import os
@@ -138,6 +138,56 @@ class libPyElk:
 		aggregation = A("terms", field = field_name, size = 10000)
 		es_search.aggs.bucket("events", aggregation)
 		result = search_qs.execute()
+		return result
+
+
+	def search_aggregation(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, field_name: str, gte: str, lte: str):
+		"""
+		Method that searches data in ElasticSearch using an aggregation.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_pattern (str): Index or index pattern where the search will be performed.
+			timestamp_field (str): Field's name that corresponds to the index timestamp.
+			field_name (str): Field's name to be used for the aggregation.
+			gte (str): Greater than or equal to the defined range.
+			lte (str): Less than or equal to the defined range.
+
+		Returns:
+			result: Search result.
+		"""
+		es_search = Search(using = conn_es, index = index_pattern)
+		es_search = es_search[0:0]
+		aggregation = A("terms", field = field_name, size = 999)
+		search_aggs = es_search.query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
+		search_aggs.aggs.bucket("events", aggregation)
+		result = search_aggs.execute()
+		return result
+
+
+	def search_multiple_aggregation(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, field_name: str, field_name_two: str, gte: str, lte: str):
+		"""
+		Method that searches data in ElasticSearch using multiple aggregations.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_pattern (str): Index or index pattern where the search will be performed.
+			timestamp_field (str): Field's name that corresponds to the index timestamp.
+			field_name (str): Field's name to be used for the aggregation.
+			field_name_two (str): Field's name to be used for the aggregation.
+			gte (str): Greater than or equal to the defined range.
+			lte (str): Less than or equal to the defined range.
+
+		Returns:
+			result: Search result.
+		"""
+		es_search = Search(using = conn_es, index = index_pattern)
+		es_search = es_search[0:0]
+		aggregation = A("terms", field = field_name, size = 999, order = {"_key" : "asc"})
+		sub_aggregation = A("top_hits", size = 1, _source = [field_name_two]) 
+		search_aggs = es_search.query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
+		search_aggs.aggs.bucket("events", aggregation).metric("events_two", sub_aggregation)
+		result = search_aggs.execute()
 		return result
 
 
