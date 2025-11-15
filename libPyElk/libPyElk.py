@@ -233,6 +233,89 @@ class libPyElk:
 		conn_es.index(index = index_name, body = data)
 
 
+	def create_snapshot(self, conn_es: Elasticsearch, index_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
+		"""
+		Method that creates a snapshot in ElasticSearch.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_name (str): Index's name.
+			repository_name (str): Repository's name.
+			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
+		"""
+		conn_es.snapshot.create(repository = repository_name, snapshot = index_name, body = {"indices" : index_name, "include_global_state" : False}, wait_for_completion = wait_for_completion)
+
+
+	def delete_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> None:
+		"""
+		Method that deletes a snapshot in ElasticSearch.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			snapshot_name (str): Snapshot's name.
+			repository_name (str): Repository's name.
+		"""
+		conn_es.snapshot.delete(repository = repository_name, snapshot = snapshot_name)
+
+
+	def restore_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
+		"""
+		Method that restores a snapshot in ElasticSearch.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			snapshot_name (str): Snapshot's name.
+			repository_name (str): Repository's name.
+			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
+		"""
+		conn_es.snapshot.restore(repository = repository_name, snapshot = snapshot_name, wait_for_completion = wait_for_completion)
+
+
+	def mount_searchable_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
+		"""
+		Method that mounts a snapshot as a searchable snapshot.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			snapshot_name (str): Snapshot's name.
+			repository_name (str): Repository's name.
+			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
+		"""
+		conn_es.searchable_snapshots.mount(repository = repository_name, snapshot = snapshot_name, body = {"index" : snapshot_name}, wait_for_completion = wait_for_completion)
+
+
+	def get_snapshot_info(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> dict:
+		"""
+		Method that obtains information about an snapshot.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			snapshot_name (str): Snapshot's name.
+			repository_name (str): Repository's name.
+
+		Returns:
+			snapshot_info (dict): Information about a specific snapshot.
+		"""
+		snapshot_info = conn_es.snapshot.get(repository = repository_name, snapshot = snapshot_name)
+		return snapshot_info
+
+
+	def get_snapshots_by_repository(self, conn_es: Elasticsearch, repository_name: str) -> list:
+		"""
+		Method that obtains snapshots stored in a specific repository.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			repository_name (str): Repository's name.
+
+		Returns:
+			snapshots_list (list): Snapshots stored in a specific repository.
+		"""
+		snapshots = conn_es.snapshot.get(repository = repository_name, snapshot = "_all")
+		snapshots_list = sorted([snapshot_name["snapshot"] for snapshot_name in snapshots["snapshots"]])
+		return snapshots_list
+
+
 	def get_indexes(self, conn_es:  Elasticsearch) -> list:
 		"""
 		Method that obtains the indexes stored in ElasticSearch. Excludes system indexes.
@@ -241,11 +324,40 @@ class libPyElk:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 
 		Returns:
-			indexes (list): All indexes' list.
+			indexes (list): Indexes' list.
 		"""
 		indexes = conn_es.indices.get(index = '*')
 		indexes = sorted([index for index in indexes if not index.startswith('.')])
 		return indexes
+
+
+	def get_repositories(self,conn_es: Elasticsearch) -> list:
+		"""
+		Method that obtains the repositories created in ElasticSearch.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+
+		Returns:
+			repositories_list (list): Repositories' list.
+		"""
+		repositories_info = conn_es.cat.repositories(format = "json")
+		repositories_list = sorted([repository["id"] for repository in repositories_info])
+		return repositories_list
+
+
+	def get_nodes_information(self, conn_es: Elasticsearch) -> dict:
+		"""
+		Method that obtains file system statistics for all nodes in the cluster.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+
+		Returns:
+			nodes_info (dict): File system statistics obtained from nodes.
+		"""
+		nodes_info = conn_es.nodes.stats(metric = "fs")["nodes"]
+		return nodes_info
 
 
 	def validate_document(self, document: dict) -> list:
