@@ -316,6 +316,17 @@ class libPyElk:
 		return snapshots_list
 
 
+	def delete_index(self, conn_es: Elasticsearch, index_name: str) -> None:
+		"""
+		Method that deletes an index in ElasticSearch.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			index_name (str): Index's name.
+		"""
+		conn_es.indices.delete(index = index_name)
+
+
 	def get_indexes(self, conn_es:  Elasticsearch) -> list:
 		"""
 		Method that obtains the indexes stored in ElasticSearch. Excludes system indexes.
@@ -329,6 +340,30 @@ class libPyElk:
 		indexes = conn_es.indices.get(index = '*')
 		indexes = sorted([index for index in indexes if not index.startswith('.')])
 		return indexes
+
+
+	def create_repository(self, conn_es: Elasticsearch, repository_name: str, repository_path: str, compress_repository: bool) -> None:
+		"""
+		Method that creates a repository in ElasticSearch.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			repository_name (str): Repository's name.
+			repository_path (str): Repository's path.
+			compress_repository (bool): Option that defines whether metadata files are stored compressed in the repository or not.
+		"""
+		conn_es.snapshot.create_repository(name = repository_name, body = {"type" : "fs", "settings" : {"location" : repository_path, "compress" : compress_repository}})
+
+
+	def delete_repository(self, conn_es: Elasticsearch, repository_name: str) -> None:
+		"""
+		Method that deletes a repository in ElasticSearch.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			repository_name (str): Repository's name.
+		"""
+		conn_es.snapshot.delete_repository(repository = repository_name)
 
 
 	def get_repositories(self,conn_es: Elasticsearch) -> list:
