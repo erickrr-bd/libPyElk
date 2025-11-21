@@ -300,6 +300,23 @@ class libPyElk:
 		return snapshot_info
 
 
+	def get_snapshot_current_status(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> str:
+		"""
+		Method that obtains a snapshot's current status.
+
+		Parameters:
+			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+			snapshot_name (str): Snapshot's name.
+			repository_name (str): Repository's name.
+
+		Returns:
+			snapshot_current_status (dict): Snapshot's current status.
+		"""
+		snapshot_status = conn_es.snapshot.status(repository = repository_name, snapshot = snapshot_name)
+		snapshot_current_status = snapshot_status["snapshots"][0]["state"]
+		return snapshot_current_status
+
+
 	def get_snapshots_by_repository(self, conn_es: Elasticsearch, repository_name: str) -> list:
 		"""
 		Method that obtains snapshots stored in a specific repository.
@@ -337,8 +354,8 @@ class libPyElk:
 		Returns:
 			indexes (list): Indexes' list.
 		"""
-		indexes = conn_es.indices.get(index = '*')
-		indexes = sorted([index for index in indexes if not index.startswith('.')])
+		indexes = conn_es.indices.get(index = "*,-.*")
+		indexes = sorted([index for index in indexes])
 		return indexes
 
 
