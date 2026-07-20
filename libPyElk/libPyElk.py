@@ -2,21 +2,23 @@
 Author: Erick Roberto Rodriguez Rodriguez
 Email: erodriguez@tekium.mx, erickrr.tbd93@gmail.com
 GitHub: https://github.com/erickrr-bd/libPyElk
-libPyElk v2.2 - November 2025
+libPyElk v2.3 - July 2026
 A lightweight Python library for managing Elasticsearch operations with ease.
 """
 import os
 from libPyUtils import libPyUtils
-from elasticsearch import Elasticsearch
-from dataclasses import dataclass, field
 from elasticsearch_dsl import Search, Q, A, utils
 from libPyConfiguration import libPyConfiguration
 from concurrent.futures import ThreadPoolExecutor
+from elasticsearch import Elasticsearch, ApiError, TransportError
 
-@dataclass
 class libPyElk:
 
-	utils: libPyUtils = field(default_factory = libPyUtils)
+	def __init__(self) -> None:
+		"""
+		Class constructor.
+		"""
+		self.utils = libPyUtils()
 
 
 	def create_connection_without_auth(self, configuration: libPyConfiguration) -> Elasticsearch:
@@ -48,13 +50,21 @@ class libPyElk:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 		"""
 		passphrase = self.utils.get_passphrase(key_file)
-		http_authentication_user = self.utils.decrypt_data(configuration.http_authentication_user, passphrase).decode("utf-8")
-		http_authentication_password = self.utils.decrypt_data(configuration.http_authentication_password, passphrase).decode("utf-8")
-		if configuration.verificate_certificate_ssl:
-			conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-		else:
-			conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-		return conn_es
+		http_authentication_user = self.utils.decrypt_data(configuration.http_authentication_user, passphrase)
+		http_authentication_password = self.utils.decrypt_data(configuration.http_authentication_password, passphrase)
+		try:
+			if configuration.verificate_certificate_ssl:
+				conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
+			else:
+				conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
+			return conn_es
+		finally:
+			passphrase = None
+			http_authentication_user = None
+			http_authentication_password = None
+			del passphrase
+			del http_authentication_user
+			del http_authentication_password
 
 
 	def create_connection_api_key(self, configuration: libPyConfiguration, key_file: str) -> Elasticsearch:
@@ -69,14 +79,22 @@ class libPyElk:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 		"""
 		passphrase = self.utils.get_passphrase(key_file)
-		api_key_id = self.utils.decrypt_data(configuration.api_key_id, passphrase).decode("utf-8")
-		api_key = self.utils.decrypt_data(configuration.api_key, passphrase).decode("utf-8")
-		if configuration.verificate_certificate_ssl:
-			conn_es = Elasticsearch(hosts = configuration.es_host, api_key  = (api_key_id, api_key), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-		else:
-			conn_es = Elasticsearch(hosts = configuration.es_host, api_key  = (api_key_id, api_key), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-		return conn_es
-
+		api_key_id = self.utils.decrypt_data(configuration.api_key_id, passphrase)
+		api_key = self.utils.decrypt_data(configuration.api_key, passphrase)
+		try:
+			if configuration.verificate_certificate_ssl:
+				conn_es = Elasticsearch(hosts = configuration.es_host, api_key = (api_key_id, api_key), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
+			else:
+				conn_es = Elasticsearch(hosts = configuration.es_host, api_key = (api_key_id, api_key), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
+			return conn_es
+		finally:
+			passphrase = None
+			api_key_id = None 
+			api_key = None
+			del passphrase
+			del api_key_id
+			del api_key
+			
 
 	def search_query_string(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str, use_fields: bool, **kwargs):
 		"""
@@ -243,7 +261,12 @@ class libPyElk:
 			repository_name (str): Repository's name.
 			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
 		"""
-		conn_es.snapshot.create(repository = repository_name, snapshot = index_name, body = {"indices" : index_name, "include_global_state" : False}, wait_for_completion = wait_for_completion)
+		try:
+			conn_es.snapshot.create(repository = repository_name, snapshot = index_name, body = {"indices" : index_name, "include_global_state" : False}, wait_for_completion = wait_for_completion)
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error creating snapshot: {api_error.message} (Status: {api_error.status_code})")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure during snapshot creation: {str(trans_error)}")
 
 
 	def delete_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> None:
@@ -255,7 +278,12 @@ class libPyElk:
 			snapshot_name (str): Snapshot's name.
 			repository_name (str): Repository's name.
 		"""
-		conn_es.snapshot.delete(repository = repository_name, snapshot = snapshot_name)
+		try:
+			conn_es.snapshot.delete(repository = repository_name, snapshot = snapshot_name)
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error creating snapshot: {api_error.message} (Status: {api_error.status_code})")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure during snapshot creation: {str(trans_error)}")
 
 
 	def restore_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
@@ -268,7 +296,12 @@ class libPyElk:
 			repository_name (str): Repository's name.
 			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
 		"""
-		conn_es.snapshot.restore(repository = repository_name, snapshot = snapshot_name, wait_for_completion = wait_for_completion)
+		try:
+			conn_es.snapshot.restore(repository = repository_name, snapshot = snapshot_name, wait_for_completion = wait_for_completion)
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error deleting snapshot: {api_error.message}")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure during snapshot deletion: {str(trans_error)}")
 
 
 	def mount_searchable_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
@@ -281,7 +314,12 @@ class libPyElk:
 			repository_name (str): Repository's name.
 			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
 		"""
-		conn_es.searchable_snapshots.mount(repository = repository_name, snapshot = snapshot_name, body = {"index" : snapshot_name}, wait_for_completion = wait_for_completion)
+		try:
+			conn_es.searchable_snapshots.mount(repository = repository_name, snapshot = snapshot_name, index = snapshot_name, wait_for_completion = wait_for_completion)
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error deleting snapshot: {api_error.message}")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure during snapshot deletion: {str(trans_error)}")
 
 
 	def get_snapshot_info(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> dict:
@@ -296,8 +334,13 @@ class libPyElk:
 		Returns:
 			snapshot_info (dict): Information about a specific snapshot.
 		"""
-		snapshot_info = conn_es.snapshot.get(repository = repository_name, snapshot = snapshot_name)
-		return snapshot_info
+		try:
+			snapshot_info = conn_es.snapshot.get(repository = repository_name, snapshot = snapshot_name)
+			return snapshot_info
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error listing repository snapshots: {api_error.message}")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure pulling snapshot catalog: {str(trans_error)}")
 
 
 	def get_snapshot_current_status(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> str:
@@ -312,9 +355,17 @@ class libPyElk:
 		Returns:
 			snapshot_current_status (dict): Snapshot's current status.
 		"""
-		snapshot_status = conn_es.snapshot.status(repository = repository_name, snapshot = snapshot_name)
-		snapshot_current_status = snapshot_status["snapshots"][0]["state"]
-		return snapshot_current_status
+		try:
+			snapshot_status = conn_es.snapshot.status(repository = repository_name, snapshot = snapshot_name)
+			snapshots_data = snapshot_status.get("snapshots")
+			if not snapshots_data:
+				return "NOT FOUND"
+			snapshot_current_status = snapshot_status["snapshots"][0]["state"]
+			return snapshot_current_status
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error listing repository snapshots: {api_error.message}")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure pulling snapshot catalog: {str(trans_error)}")
 
 
 	def get_snapshots_by_repository(self, conn_es: Elasticsearch, repository_name: str) -> list:
@@ -328,9 +379,15 @@ class libPyElk:
 		Returns:
 			snapshots_list (list): Snapshots stored in a specific repository.
 		"""
-		snapshots = conn_es.snapshot.get(repository = repository_name, snapshot = "_all")
-		snapshots_list = sorted([snapshot_name["snapshot"] for snapshot_name in snapshots["snapshots"]])
-		return snapshots_list
+		try:
+			snapshots = conn_es.snapshot.get(repository = repository_name, snapshot = "_all")
+			snapshots_data = snapshots.get("snapshots", [])
+			snapshots_list = sorted([snapshot_name["snapshot"] for snapshot_name in snapshots_data if isinstance(snapshot_name, dict) and "snapshot" in snapshot_name])
+			return snapshots_list
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error listing repository snapshots: {api_error.message}")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure pulling snapshot catalog: {str(trans_error)}")
 
 
 	def delete_index(self, conn_es: Elasticsearch, index_name: str) -> None:
@@ -341,10 +398,15 @@ class libPyElk:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 			index_name (str): Index's name.
 		"""
-		conn_es.indices.delete(index = index_name)
+		try:
+			conn_es.indices.delete(index = index_name)
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error deleting index '{index_name}': {api_error.message} (Status: {api_error.status_code})")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure during index deletion: {str(trans_error)}")
 
 
-	def get_indexes(self, conn_es:  Elasticsearch) -> list:
+	def get_indexes(self, conn_es: Elasticsearch) -> list:
 		"""
 		Method that obtains the indexes stored in ElasticSearch. Excludes system indexes.
 
@@ -354,9 +416,16 @@ class libPyElk:
 		Returns:
 			indexes (list): Indexes' list.
 		"""
-		indexes = conn_es.indices.get(index = "*,-.*")
-		indexes = sorted([index for index in indexes])
-		return indexes
+		try:
+			indexes = conn_es.indices.get(index = "*,-.*")
+			if not indexes:
+				return []
+			indexes = sorted([index for index in indexes])
+			return indexes
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error listing cluster indexes: {api_error.message} (Status: {api_error.status_code})")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure pulling indexes catalog: {str(trans_error)}")
 
 
 	def create_repository(self, conn_es: Elasticsearch, repository_name: str, repository_path: str, compress_repository: bool) -> None:
@@ -369,7 +438,12 @@ class libPyElk:
 			repository_path (str): Repository's path.
 			compress_repository (bool): Option that defines whether metadata files are stored compressed in the repository or not.
 		"""
-		conn_es.snapshot.create_repository(name = repository_name, body = {"type" : "fs", "settings" : {"location" : repository_path, "compress" : compress_repository}})
+		try:
+			conn_es.snapshot.create_repository(name = repository_name, body = {"type" : "fs", "settings" : {"location" : repository_path, "compress" : compress_repository}})
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error creating repository '{repository_name}': {api_error.message} (Status: {api_error.status_code})")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure during repository creation: {str(trans_error)}")
 
 
 	def delete_repository(self, conn_es: Elasticsearch, repository_name: str) -> None:
@@ -380,7 +454,12 @@ class libPyElk:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 			repository_name (str): Repository's name.
 		"""
-		conn_es.snapshot.delete_repository(repository = repository_name)
+		try:
+			conn_es.snapshot.delete_repository(name = repository_name)
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error deleting repository '{repository_name}': {api_error.message}")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure during repository deletion: {str(trans_error)}")
 
 
 	def get_repositories(self,conn_es: Elasticsearch) -> list:
@@ -393,9 +472,16 @@ class libPyElk:
 		Returns:
 			repositories_list (list): Repositories' list.
 		"""
-		repositories_info = conn_es.cat.repositories(format = "json")
-		repositories_list = sorted([repository["id"] for repository in repositories_info])
-		return repositories_list
+		try:
+			repositories_info = conn_es.cat.repositories(format = "json")
+			if not repositories_info:
+				return []
+			repositories_list = sorted([repository["id"] for repository in repositories_info if isinstance(repository, dict) and "id" in repository])
+			return repositories_list
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error listing cluster repositories: {api_error.message}")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure pulling repositories catalog: {str(trans_error)}")
 
 
 	def get_nodes_information(self, conn_es: Elasticsearch) -> dict:
@@ -408,8 +494,15 @@ class libPyElk:
 		Returns:
 			nodes_info (dict): File system statistics obtained from nodes.
 		"""
-		nodes_info = conn_es.nodes.stats(metric = "fs")["nodes"]
-		return nodes_info
+		try:
+			nodes_info = conn_es.nodes.stats(metric = "fs")["nodes"]
+			if not nodes_info:
+				return {}
+			return nodes_info
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API Error gathering cluster nodes metrics: {api_error.message} (Status: {api_error.status_code})")
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure pulling cluster nodes telemetry: {str(trans_error)}")
 
 
 	def validate_document(self, document: dict) -> list:
