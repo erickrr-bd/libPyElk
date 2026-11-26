@@ -2,17 +2,39 @@
 Author: Erick Roberto Rodriguez Rodriguez
 Email: erodriguez@tekium.mx, erickrr.tbd93@gmail.com
 GitHub: https://github.com/erickrr-bd/libPyElk
-libPyElk v2.3 - July 2026
+libPyElk v2.5 - November 2026
 A lightweight Python library for managing Elasticsearch operations with ease.
+Requires elasticsearch >= 8.18 (DSL included as elasticsearch.dsl), libPyUtils >= 2.4.0 and libPyConfiguration >= 1.3.0.
 """
-import os
+from __future__ import annotations
+
+import re
+import ssl
+from typing import TYPE_CHECKING
+from contextlib import contextmanager
 from libPyUtils import libPyUtils
-from elasticsearch_dsl import Search, Q, A, utils
-from libPyConfiguration import libPyConfiguration
-from concurrent.futures import ThreadPoolExecutor
+from elasticsearch.dsl import Search, A
+from elasticsearch.helpers import scan
 from elasticsearch import Elasticsearch, ApiError, TransportError
 
+if TYPE_CHECKING:
+	# Only needed for type hints: the service doesn't load libPyDialog/pythondialog.
+	from libPyConfiguration import libPyConfiguration
+
+# Exact names of indexes and snapshots (no wildcards, commas or uppercase).
+NAME_REGEX = re.compile(r"^[a-z0-9][a-z0-9._+-]*$")
+
+# Prefix of every line of a document converted to text.
+CHECK = "☑️"
+
+HTTP_AUTH = "HTTP Authentication"
+API_KEY = "API Key"
+
+
 class libPyElk:
+
+	REQUEST_TIMEOUT = 30
+	MAX_RETRIES = 3
 
 	def __init__(self) -> None:
 		"""
@@ -21,84 +43,152 @@ class libPyElk:
 		self.utils = libPyUtils()
 
 
-	def create_connection_without_auth(self, configuration: libPyConfiguration) -> Elasticsearch:
+	# --- Internal helpers ----------------------------------------------------------------------
+	@contextmanager
+	def _es_errors(self, action: str):
 		"""
-		Method that creates a connection to ElasticSearch without authentication.
-
-		Parameters:
-			configuration (libPyConfiguration): libPyConfiguration's Object.
-
-		Returns:
-			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+		Context manager that converts Elasticsearch errors into RuntimeError/ConnectionError (keeping the cause).
 		"""
-		if configuration.verificate_certificate_ssl:
-			conn_es = Elasticsearch(hosts = configuration.es_host, verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
+		try:
+			yield
+		except ApiError as api_error:
+			raise RuntimeError(f"Elasticsearch API error {action}: {api_error.message} (Status: {api_error.status_code})") from api_error
+		except TransportError as trans_error:
+			raise ConnectionError(f"Network transport failure {action}: {trans_error}") from trans_error
+
+
+	@staticmethod
+	def _validate_name(name: str, kind: str) -> None:
+		"""
+		Method that validates an exact index/snapshot name, so a destructive operation never receives a wildcard.
+		"""
+		if not isinstance(name, str) or not NAME_REGEX.fullmatch(name) or len(name.encode("utf-8")) > 255:
+			raise ValueError(f"Invalid {kind} name: {name!r}")
+
+
+	def _decrypt_pair(self, configuration: libPyConfiguration, fields: tuple, key_file: str, context: str, owner: str = None, allow_legacy: bool = False) -> tuple:
+		"""
+		Method that decrypts two credentials. The passphrase is wiped from memory afterwards.
+		"""
+		passphrase = self.utils.get_passphrase(key_file, owner = owner)
+		try:
+			return tuple(self.utils.decrypt_data(getattr(configuration, field), passphrase, allow_legacy = allow_legacy, context = f"{context}:{field}") for field in fields)
+		finally:
+			self.utils.zeroize(passphrase)
+
+
+	def _connection_options(self, configuration: libPyConfiguration, insecure: bool = False, relax_x509_strict: bool = False) -> dict:
+		"""
+		Method that builds the connection options. Certificates are always verified (custom CA if configured,
+		certifi's public CAs otherwise) unless insecure is explicitly True.
+
+		relax_x509_strict: Python >= 3.13 rejects CA certificates that don't fully follow RFC 5280 (for example,
+		without the Key Usage extension). If True, only that strict check is disabled: the chain of trust and the
+		hostname are still verified. Use it only when the CA can't be regenerated.
+		"""
+		options = {"hosts": configuration.es_host, "request_timeout": self.REQUEST_TIMEOUT, "max_retries": self.MAX_RETRIES, "retry_on_timeout": True}
+		if insecure:
+			options["verify_certs"] = False
+		elif configuration.verificate_certificate_ssl and configuration.certificate_file and relax_x509_strict:
+			# ssl_context replaces verify_certs/ca_certs (they can't be combined).
+			ssl_context = ssl.create_default_context(cafile = configuration.certificate_file)
+			ssl_context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+			options["ssl_context"] = ssl_context
 		else:
-			conn_es = Elasticsearch(hosts = configuration.es_host, verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-		return conn_es
+			options["verify_certs"] = True
+			if configuration.verificate_certificate_ssl and configuration.certificate_file:
+				options["ca_certs"] = configuration.certificate_file
+		return options
 
 
-	def create_connection_http_auth(self, configuration: libPyConfiguration, key_file: str) -> Elasticsearch:
+	def _require_https(self, configuration: libPyConfiguration) -> None:
+		if not self.utils.validate_https_urls(configuration.es_host):
+			raise ValueError("Authentication requires all ElasticSearch hosts to use HTTPS.")
+
+
+	def _base_search(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str) -> Search:
 		"""
-		Method that creates a connection to ElasticSearch using HTTP authentication.
+		Method that builds a search in filter context (no scoring, cacheable) with query string and time range.
+		"""
+		return (Search(using = conn_es, index = index_pattern)
+			.filter("query_string", query = query_string)
+			.filter("range", **{timestamp_field: {"gte": gte, "lte": lte}}))
+
+
+	def _altered_documents(self, conn_es: Elasticsearch, index: str, query: dict) -> list:
+		"""
+		Method that returns the documents whose version is greater than 1. Only metadata is transferred
+		(_source disabled) and the scroll is always cleared, even if an error occurs.
+		"""
+		body = {"query": query, "version": True, "_source": False}
+		return [(hit["_index"], hit["_id"], hit["_version"])
+			for hit in scan(conn_es, index = index, query = body, size = 5000, scroll = "2m")
+			if hit["_version"] > 1]
+
+
+	# --- Connection ----------------------------------------------------------------------------
+	def create_connection(self, configuration: libPyConfiguration, key_file: str, context: str, owner: str = None, insecure: bool = False, allow_legacy: bool = False, relax_x509_strict: bool = False) -> Elasticsearch:
+		"""
+		Method that creates a connection to ElasticSearch using the authentication method of the configuration.
+		Create it once and reuse it: the client is thread-safe and has its own connection pool.
 
 		Parameters:
 			configuration (libPyConfiguration): libPyConfiguration's Object.
-			key_file (str): Key file path. 
+			key_file (str): Key file path.
+			context (str): Encryption context used by libPyConfiguration (e.g. "telk_alert").
+			owner (str): User expected to own the key file.
+			insecure (bool): If True, certificates are NOT verified (avoid it; it allows man-in-the-middle attacks).
+			allow_legacy (bool): If True, secrets encrypted by libPyConfiguration < 1.3 can be decrypted (migration only).
+			relax_x509_strict (bool): If True, accepts a custom CA that doesn't fully follow RFC 5280 (e.g. without Key Usage). Chain and hostname are still verified.
 
 		Returns:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 		"""
-		passphrase = self.utils.get_passphrase(key_file)
-		http_authentication_user = self.utils.decrypt_data(configuration.http_authentication_user, passphrase)
-		http_authentication_password = self.utils.decrypt_data(configuration.http_authentication_password, passphrase)
-		try:
-			if configuration.verificate_certificate_ssl:
-				conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
+		options = self._connection_options(configuration, insecure, relax_x509_strict)
+		if configuration.use_authentication:
+			self._require_https(configuration)
+			if configuration.authentication_method == HTTP_AUTH:
+				options["basic_auth"] = self._decrypt_pair(configuration, ("http_authentication_user", "http_authentication_password"), key_file, context, owner, allow_legacy)
+			elif configuration.authentication_method == API_KEY:
+				options["api_key"] = self._decrypt_pair(configuration, ("api_key_id", "api_key"), key_file, context, owner, allow_legacy)
 			else:
-				conn_es = Elasticsearch(hosts = configuration.es_host, basic_auth = (http_authentication_user, http_authentication_password), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-			return conn_es
-		finally:
-			passphrase = None
-			http_authentication_user = None
-			http_authentication_password = None
-			del passphrase
-			del http_authentication_user
-			del http_authentication_password
+				raise ValueError(f"Invalid authentication method: {configuration.authentication_method!r}")
+		return Elasticsearch(**options)
 
 
-	def create_connection_api_key(self, configuration: libPyConfiguration, key_file: str) -> Elasticsearch:
+	def create_connection_without_auth(self, configuration: libPyConfiguration, insecure: bool = False, relax_x509_strict: bool = False) -> Elasticsearch:
 		"""
-		Method that creates a connection to ElasticSearch using API Key.
-
-		Parameters:
-			configuration (libPyConfiguration): libPyConfiguration's Object.
-			key_file (str): Key file path. 
-
-		Returns:
-			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
+		Method that creates a connection to ElasticSearch without authentication (kept for backwards compatibility).
 		"""
-		passphrase = self.utils.get_passphrase(key_file)
-		api_key_id = self.utils.decrypt_data(configuration.api_key_id, passphrase)
-		api_key = self.utils.decrypt_data(configuration.api_key, passphrase)
-		try:
-			if configuration.verificate_certificate_ssl:
-				conn_es = Elasticsearch(hosts = configuration.es_host, api_key = (api_key_id, api_key), verify_certs = True, ca_certs = configuration.certificate_file, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-			else:
-				conn_es = Elasticsearch(hosts = configuration.es_host, api_key = (api_key_id, api_key), verify_certs = False, ssl_show_warn = False, request_timeout = 90, max_retries = 3, retry_on_timeout = True)
-			return conn_es
-		finally:
-			passphrase = None
-			api_key_id = None 
-			api_key = None
-			del passphrase
-			del api_key_id
-			del api_key
-			
+		return Elasticsearch(**self._connection_options(configuration, insecure, relax_x509_strict))
 
-	def search_query_string(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str, use_fields: bool, **kwargs):
+
+	def create_connection_http_auth(self, configuration: libPyConfiguration, key_file: str, context: str = "telk_alert", owner: str = None, insecure: bool = False, relax_x509_strict: bool = False) -> Elasticsearch:
+		"""
+		Method that creates a connection to ElasticSearch using HTTP authentication (kept for backwards compatibility).
+		"""
+		self._require_https(configuration)
+		options = self._connection_options(configuration, insecure, relax_x509_strict)
+		options["basic_auth"] = self._decrypt_pair(configuration, ("http_authentication_user", "http_authentication_password"), key_file, context, owner)
+		return Elasticsearch(**options)
+
+
+	def create_connection_api_key(self, configuration: libPyConfiguration, key_file: str, context: str = "telk_alert", owner: str = None, insecure: bool = False, relax_x509_strict: bool = False) -> Elasticsearch:
+		"""
+		Method that creates a connection to ElasticSearch using API Key (kept for backwards compatibility).
+		"""
+		self._require_https(configuration)
+		options = self._connection_options(configuration, insecure, relax_x509_strict)
+		options["api_key"] = self._decrypt_pair(configuration, ("api_key_id", "api_key"), key_file, context, owner)
+		return Elasticsearch(**options)
+
+
+	# --- Searches ------------------------------------------------------------------------------
+	def search_query_string(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str, use_fields: bool, size: int = 50, **kwargs):
 		"""
 		Method that searches data in ElasticSearch using query string.
+		The exact number of matches is in result.hits.total.value (compare total_events against it, not len(result)).
+		The documents are sorted by timestamp_field, newest first.
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
@@ -108,6 +198,7 @@ class libPyElk:
 			gte (str): Greater than or equal to the defined range.
 			lte (str): Less than or equal to the defined range.
 			use_fields (bool): If true, it limits the search result to specific fields, otherwise it returns all the fields in the document.
+			size (int): Maximum number of documents returned.
 
 		Keyword Args:
 			fields (list): List with field's names.
@@ -115,20 +206,16 @@ class libPyElk:
 		Returns:
 			result: Search result.
 		"""
-		es_search = Search(using = conn_es, index = index_pattern)
-		es_search = es_search[0:10000]
-		es_query_string = Q("query_string", query = query_string)
+		# Newest events first: when there are more matches than "size", the most recent ones are returned.
+		search = self._base_search(conn_es, index_pattern, query_string, timestamp_field, gte, lte).sort({timestamp_field: {"order": "desc"}}).extra(track_total_hits = True)[0:size]
 		if use_fields:
-			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields"])
-		else:
-			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
-		result = search_qs.execute()
-		return result
+			search = search.source(kwargs["fields"])
+		return search.execute()
 
 
-	def search_query_string_aggregation(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str, field_name: str, use_fields: bool, **kwargs):
+	def search_query_string_aggregation(self, conn_es: Elasticsearch, index_pattern: str, query_string: str, timestamp_field: str, gte: str, lte: str, field_name: str, use_fields: bool, size: int = 0, buckets: int = 1000, **kwargs):
 		"""
-		Method that searches data in ElasticSearch using query string and aggregations.
+		Method that searches data in ElasticSearch using query string and a terms aggregation ("events").
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
@@ -138,7 +225,9 @@ class libPyElk:
 			gte (str): Greater than or equal to the defined range.
 			lte (str): Less than or equal to the defined range.
 			field_name (str): Field's name to be used for the aggregation.
-			use_fields (bool): If true, it limits the search result to specific fields, otherwise it returns all the fields in the document.
+			use_fields (bool): If true, it limits the returned documents to specific fields.
+			size (int): Number of documents returned besides the aggregation (0 = only the aggregation).
+			buckets (int): Maximum number of buckets.
 
 		Keyword Args:
 			fields (list): List with field's names.
@@ -146,20 +235,14 @@ class libPyElk:
 		Returns:
 			result: Search result.
 		"""
-		es_search = Search(using = conn_es, index = index_pattern)
-		es_search = es_search[0:10000]
-		es_query_string = Q("query_string", query = query_string)
-		if use_fields:
-			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = kwargs["fields"])
-		else:
-			search_qs = es_search.query(es_query_string).query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
-		aggregation = A("terms", field = field_name, size = 10000)
-		es_search.aggs.bucket("events", aggregation)
-		result = search_qs.execute()
-		return result
+		search = self._base_search(conn_es, index_pattern, query_string, timestamp_field, gte, lte)[0:size]
+		if size and use_fields:
+			search = search.source(kwargs["fields"])
+		search.aggs.bucket("events", "terms", field = field_name, size = buckets)
+		return search.execute()
 
 
-	def search_aggregation(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, field_name: str, gte: str, lte: str):
+	def search_aggregation(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, field_name: str, gte: str, lte: str, buckets: int = 999):
 		"""
 		Method that searches data in ElasticSearch using an aggregation.
 
@@ -170,20 +253,17 @@ class libPyElk:
 			field_name (str): Field's name to be used for the aggregation.
 			gte (str): Greater than or equal to the defined range.
 			lte (str): Less than or equal to the defined range.
+			buckets (int): Maximum number of buckets.
 
 		Returns:
 			result: Search result.
 		"""
-		es_search = Search(using = conn_es, index = index_pattern)
-		es_search = es_search[0:0]
-		aggregation = A("terms", field = field_name, size = 999)
-		search_aggs = es_search.query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
-		search_aggs.aggs.bucket("events", aggregation)
-		result = search_aggs.execute()
-		return result
+		search = Search(using = conn_es, index = index_pattern).filter("range", **{timestamp_field: {"gte": gte, "lte": lte}})[0:0]
+		search.aggs.bucket("events", "terms", field = field_name, size = buckets)
+		return search.execute()
 
 
-	def search_multiple_aggregation(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, field_name: str, field_name_two: str, gte: str, lte: str):
+	def search_multiple_aggregation(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, field_name: str, field_name_two: str, gte: str, lte: str, buckets: int = 999):
 		"""
 		Method that searches data in ElasticSearch using multiple aggregations.
 
@@ -195,23 +275,21 @@ class libPyElk:
 			field_name_two (str): Field's name to be used for the aggregation.
 			gte (str): Greater than or equal to the defined range.
 			lte (str): Less than or equal to the defined range.
+			buckets (int): Maximum number of buckets.
 
 		Returns:
 			result: Search result.
 		"""
-		es_search = Search(using = conn_es, index = index_pattern)
-		es_search = es_search[0:0]
-		aggregation = A("terms", field = field_name, size = 999, order = {"_key" : "asc"})
-		sub_aggregation = A("top_hits", size = 1, _source = [field_name_two]) 
-		search_aggs = es_search.query("range", **{timestamp_field : {"gte" : gte, "lte" : lte}}).source(fields = None)
-		search_aggs.aggs.bucket("events", aggregation).metric("events_two", sub_aggregation)
-		result = search_aggs.execute()
-		return result
+		search = Search(using = conn_es, index = index_pattern).filter("range", **{timestamp_field: {"gte": gte, "lte": lte}})[0:0]
+		aggregation = A("terms", field = field_name, size = buckets, order = {"_key": "asc"})
+		sub_aggregation = A("top_hits", size = 1, _source = [field_name_two])
+		search.aggs.bucket("events", aggregation).metric("events_two", sub_aggregation)
+		return search.execute()
 
 
-	def convert_data_to_str(self, hit: dict) -> str:
+	def convert_data_to_str(self, hit) -> str:
 		"""
-		MMethod that converts an Elastic document into a string.
+		Method that converts an Elastic document into a string (any depth: "a.b.c = value" per line).
 
 		Parameters:
 			hit (dict): Object that contains the document data.
@@ -219,26 +297,21 @@ class libPyElk:
 		Returns:
 			message (str): String obtained from the conversion.
 		"""
-		message = ""
-		for hits in hit:
-			if not (type(hit[str(hits)]) is utils.AttrDict):
-				message += u"\u2611\uFE0F" + ' ' + hits + " = " + str(hit[str(hits)]) + '\n'
+		data = hit.to_dict() if hasattr(hit, "to_dict") else dict(hit)
+		lines = []
+
+		def walk(node, prefix: str) -> None:
+			if isinstance(node, dict):
+				for key, value in node.items():
+					walk(value, f"{prefix}.{key}" if prefix else str(key))
 			else:
-				for hits_two in hit[str(hits)]:
-					if not (type(hit[str(hits)][str(hits_two)]) is utils.AttrDict):
-						message += u"\u2611\uFE0F" + ' ' + hits + '.' + hits_two + " = " + str(hit[str(hits)][str(hits_two)]) + '\n'
-					else:
-						for hits_three in hit[str(hits)][str(hits_two)]:
-							if not (type(hit[str(hits)][str(hits_two)][str(hits_three)]) is utils.AttrDict):
-								message += u"\u2611\uFE0F" + ' ' + hits + '.' + hits_two + '.' + hits_three + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
-							else:
-								for hits_four in hit[str(hits)][str(hits_two)][str(hits_three)]:
-									if not (type(hit[str(hits)][str(hits_two)][str(hits_three)][str(hits_four)]) is utils.AttrDict):
-										message += u"\u2611\uFE0F" + ' ' + hits + '.' + hits_two + '.' + hits_three + '.' + hits_four + " = " + str(hit[str(hits)][str(hits_two)][str(hits_three)]) + '\n'
-		message += "\n\n"
-		return message
+				lines.append(f"{CHECK} {prefix} = {node}")
+
+		walk(data, "")
+		return ("\n".join(lines) + "\n" if lines else "") + "\n\n"
 
 
+	# --- Documents -----------------------------------------------------------------------------
 	def add_new_document(self, conn_es: Elasticsearch, index_name: str, data: dict) -> None:
 		"""
 		Method that adds a new document to an index.
@@ -248,12 +321,14 @@ class libPyElk:
 			index_name (str): Index's name where the new document will be added.
 			data (dict): Dictionary with the data to be added to the new document.
 		"""
-		conn_es.index(index = index_name, body = data)
+		with self._es_errors(f"adding a document to '{index_name}'"):
+			conn_es.index(index = index_name, document = data)
 
 
+	# --- Snapshots -----------------------------------------------------------------------------
 	def create_snapshot(self, conn_es: Elasticsearch, index_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
 		"""
-		Method that creates a snapshot in ElasticSearch.
+		Method that creates a snapshot (named as the index) in ElasticSearch.
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
@@ -261,12 +336,9 @@ class libPyElk:
 			repository_name (str): Repository's name.
 			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
 		"""
-		try:
-			conn_es.snapshot.create(repository = repository_name, snapshot = index_name, body = {"indices" : index_name, "include_global_state" : False}, wait_for_completion = wait_for_completion)
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error creating snapshot: {api_error.message} (Status: {api_error.status_code})")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure during snapshot creation: {str(trans_error)}")
+		self._validate_name(index_name, "index")
+		with self._es_errors(f"creating snapshot '{index_name}'"):
+			conn_es.snapshot.create(repository = repository_name, snapshot = index_name, indices = index_name, include_global_state = False, wait_for_completion = wait_for_completion)
 
 
 	def delete_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> None:
@@ -278,12 +350,9 @@ class libPyElk:
 			snapshot_name (str): Snapshot's name.
 			repository_name (str): Repository's name.
 		"""
-		try:
+		self._validate_name(snapshot_name, "snapshot")
+		with self._es_errors(f"deleting snapshot '{snapshot_name}'"):
 			conn_es.snapshot.delete(repository = repository_name, snapshot = snapshot_name)
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error creating snapshot: {api_error.message} (Status: {api_error.status_code})")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure during snapshot creation: {str(trans_error)}")
 
 
 	def restore_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
@@ -296,17 +365,14 @@ class libPyElk:
 			repository_name (str): Repository's name.
 			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
 		"""
-		try:
+		self._validate_name(snapshot_name, "snapshot")
+		with self._es_errors(f"restoring snapshot '{snapshot_name}'"):
 			conn_es.snapshot.restore(repository = repository_name, snapshot = snapshot_name, wait_for_completion = wait_for_completion)
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error deleting snapshot: {api_error.message}")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure during snapshot deletion: {str(trans_error)}")
 
 
 	def mount_searchable_snapshot(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str, wait_for_completion: bool = True) -> None:
 		"""
-		Method that mounts a snapshot as a searchable snapshot.
+		Method that mounts a snapshot as a searchable snapshot (the index inside the snapshot has the snapshot's name).
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
@@ -314,12 +380,9 @@ class libPyElk:
 			repository_name (str): Repository's name.
 			wait_for_completion (bool): Option that defines whether to wait for the task to finish. Default value (true).
 		"""
-		try:
+		self._validate_name(snapshot_name, "snapshot")
+		with self._es_errors(f"mounting searchable snapshot '{snapshot_name}'"):
 			conn_es.searchable_snapshots.mount(repository = repository_name, snapshot = snapshot_name, index = snapshot_name, wait_for_completion = wait_for_completion)
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error deleting snapshot: {api_error.message}")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure during snapshot deletion: {str(trans_error)}")
 
 
 	def get_snapshot_info(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> dict:
@@ -334,13 +397,8 @@ class libPyElk:
 		Returns:
 			snapshot_info (dict): Information about a specific snapshot.
 		"""
-		try:
-			snapshot_info = conn_es.snapshot.get(repository = repository_name, snapshot = snapshot_name)
-			return snapshot_info
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error listing repository snapshots: {api_error.message}")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure pulling snapshot catalog: {str(trans_error)}")
+		with self._es_errors(f"getting snapshot '{snapshot_name}'"):
+			return conn_es.snapshot.get(repository = repository_name, snapshot = snapshot_name)
 
 
 	def get_snapshot_current_status(self, conn_es: Elasticsearch, snapshot_name: str, repository_name: str) -> str:
@@ -353,24 +411,16 @@ class libPyElk:
 			repository_name (str): Repository's name.
 
 		Returns:
-			snapshot_current_status (dict): Snapshot's current status.
+			snapshot_current_status (str): Snapshot's current status ("NOT FOUND" if it doesn't exist).
 		"""
-		try:
-			snapshot_status = conn_es.snapshot.status(repository = repository_name, snapshot = snapshot_name)
-			snapshots_data = snapshot_status.get("snapshots")
-			if not snapshots_data:
-				return "NOT FOUND"
-			snapshot_current_status = snapshot_status["snapshots"][0]["state"]
-			return snapshot_current_status
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error listing repository snapshots: {api_error.message}")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure pulling snapshot catalog: {str(trans_error)}")
+		with self._es_errors(f"getting the status of snapshot '{snapshot_name}'"):
+			snapshots_data = conn_es.snapshot.status(repository = repository_name, snapshot = snapshot_name).get("snapshots")
+			return snapshots_data[0]["state"] if snapshots_data else "NOT FOUND"
 
 
 	def get_snapshots_by_repository(self, conn_es: Elasticsearch, repository_name: str) -> list:
 		"""
-		Method that obtains snapshots stored in a specific repository.
+		Method that obtains the names of the snapshots stored in a specific repository (lightweight listing).
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
@@ -379,36 +429,28 @@ class libPyElk:
 		Returns:
 			snapshots_list (list): Snapshots stored in a specific repository.
 		"""
-		try:
-			snapshots = conn_es.snapshot.get(repository = repository_name, snapshot = "_all")
-			snapshots_data = snapshots.get("snapshots", [])
-			snapshots_list = sorted([snapshot_name["snapshot"] for snapshot_name in snapshots_data if isinstance(snapshot_name, dict) and "snapshot" in snapshot_name])
-			return snapshots_list
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error listing repository snapshots: {api_error.message}")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure pulling snapshot catalog: {str(trans_error)}")
+		with self._es_errors(f"listing the snapshots of repository '{repository_name}'"):
+			snapshots = conn_es.snapshot.get(repository = repository_name, snapshot = "_all", verbose = False)
+			return sorted(snapshot["snapshot"] for snapshot in snapshots.get("snapshots", []) if isinstance(snapshot, dict) and "snapshot" in snapshot)
 
 
+	# --- Indexes -------------------------------------------------------------------------------
 	def delete_index(self, conn_es: Elasticsearch, index_name: str) -> None:
 		"""
-		Method that deletes an index in ElasticSearch.
+		Method that deletes an index in ElasticSearch (exact name only, wildcards are rejected).
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 			index_name (str): Index's name.
 		"""
-		try:
+		self._validate_name(index_name, "index")
+		with self._es_errors(f"deleting index '{index_name}'"):
 			conn_es.indices.delete(index = index_name)
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error deleting index '{index_name}': {api_error.message} (Status: {api_error.status_code})")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure during index deletion: {str(trans_error)}")
 
 
 	def get_indexes(self, conn_es: Elasticsearch) -> list:
 		"""
-		Method that obtains the indexes stored in ElasticSearch. Excludes system indexes.
+		Method that obtains the names of the indexes stored in ElasticSearch. Excludes system indexes.
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
@@ -416,21 +458,15 @@ class libPyElk:
 		Returns:
 			indexes (list): Indexes' list.
 		"""
-		try:
-			indexes = conn_es.indices.get(index = "*,-.*")
-			if not indexes:
-				return []
-			indexes = sorted([index for index in indexes])
-			return indexes
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error listing cluster indexes: {api_error.message} (Status: {api_error.status_code})")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure pulling indexes catalog: {str(trans_error)}")
+		with self._es_errors("listing cluster indexes"):
+			indexes = conn_es.cat.indices(index = "*,-.*", h = "index", format = "json")
+			return sorted(item["index"] for item in indexes or [] if isinstance(item, dict) and "index" in item)
 
 
+	# --- Repositories --------------------------------------------------------------------------
 	def create_repository(self, conn_es: Elasticsearch, repository_name: str, repository_path: str, compress_repository: bool) -> None:
 		"""
-		Method that creates a repository in ElasticSearch.
+		Method that creates a repository (shared file system) in ElasticSearch.
 
 		Parameters:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
@@ -438,12 +474,9 @@ class libPyElk:
 			repository_path (str): Repository's path.
 			compress_repository (bool): Option that defines whether metadata files are stored compressed in the repository or not.
 		"""
-		try:
-			conn_es.snapshot.create_repository(name = repository_name, body = {"type" : "fs", "settings" : {"location" : repository_path, "compress" : compress_repository}})
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error creating repository '{repository_name}': {api_error.message} (Status: {api_error.status_code})")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure during repository creation: {str(trans_error)}")
+		with self._es_errors(f"creating repository '{repository_name}'"):
+			# "body" is kept here because its replacement parameter changed name between 8.x client versions.
+			conn_es.snapshot.create_repository(name = repository_name, body = {"type": "fs", "settings": {"location": repository_path, "compress": compress_repository}})
 
 
 	def delete_repository(self, conn_es: Elasticsearch, repository_name: str) -> None:
@@ -454,15 +487,11 @@ class libPyElk:
 			conn_es (ElasticSearch): A straightforward mapping from Python to ES REST endpoints.
 			repository_name (str): Repository's name.
 		"""
-		try:
+		with self._es_errors(f"deleting repository '{repository_name}'"):
 			conn_es.snapshot.delete_repository(name = repository_name)
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error deleting repository '{repository_name}': {api_error.message}")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure during repository deletion: {str(trans_error)}")
 
 
-	def get_repositories(self,conn_es: Elasticsearch) -> list:
+	def get_repositories(self, conn_es: Elasticsearch) -> list:
 		"""
 		Method that obtains the repositories created in ElasticSearch.
 
@@ -472,18 +501,12 @@ class libPyElk:
 		Returns:
 			repositories_list (list): Repositories' list.
 		"""
-		try:
+		with self._es_errors("listing cluster repositories"):
 			repositories_info = conn_es.cat.repositories(format = "json")
-			if not repositories_info:
-				return []
-			repositories_list = sorted([repository["id"] for repository in repositories_info if isinstance(repository, dict) and "id" in repository])
-			return repositories_list
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error listing cluster repositories: {api_error.message}")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure pulling repositories catalog: {str(trans_error)}")
+			return sorted(repository["id"] for repository in repositories_info or [] if isinstance(repository, dict) and "id" in repository)
 
 
+	# --- Nodes ---------------------------------------------------------------------------------
 	def get_nodes_information(self, conn_es: Elasticsearch) -> dict:
 		"""
 		Method that obtains file system statistics for all nodes in the cluster.
@@ -494,31 +517,19 @@ class libPyElk:
 		Returns:
 			nodes_info (dict): File system statistics obtained from nodes.
 		"""
-		try:
-			nodes_info = conn_es.nodes.stats(metric = "fs")["nodes"]
-			if not nodes_info:
-				return {}
-			return nodes_info
-		except ApiError as api_error:
-			raise RuntimeError(f"Elasticsearch API Error gathering cluster nodes metrics: {api_error.message} (Status: {api_error.status_code})")
-		except TransportError as trans_error:
-			raise ConnectionError(f"Network transport failure pulling cluster nodes telemetry: {str(trans_error)}")
+		with self._es_errors("getting cluster nodes statistics"):
+			return conn_es.nodes.stats(metric = "fs").get("nodes") or {}
 
 
+	# --- Integrity -----------------------------------------------------------------------------
 	def validate_document(self, document: dict) -> list:
 		"""
-		Method that validates the document's integrity. Validates if the document version is greater than 1.
-
-		Parameters:
-			document (dict): Document to validate.
+		Method that validates the document's integrity (kept for backwards compatibility).
 
 		Returns:
-			documents (list): Documents' list whose version is greater than 1.
+			documents (list): [(index, id, version)] if the document version is greater than 1.
 		"""
-		documents = []
-		if document["_version"] > 1:
-			documents.append((document["_index"], document["_id"], document["_version"]))
-		return documents
+		return [(document["_index"], document["_id"], document["_version"])] if document["_version"] > 1 else []
 
 
 	def validate_index_integrity(self, conn_es: Elasticsearch, index_name: str) -> list:
@@ -532,21 +543,8 @@ class libPyElk:
 		Returns:
 			documents (list): Modified or altered documents' list.
 		"""
-		documents = []
-		body = {"query" : {"match_all" : {}}}
-		response = conn_es.search(index = index_name, body = body, scroll = "2m", size = 1000, version = True)
-		scroll_id = response["_scroll_id"]
-		hits = response["hits"]["hits"]
-		with ThreadPoolExecutor(max_workers = os.cpu_count() * 2) as executor:
-			while hits:
-				results = list(executor.map(self.validate_document, hits))
-				for item in results:
-					documents.extend(item)
-				response = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
-				scroll_id = response["_scroll_id"]
-				hits = response["hits"]["hits"]
-		conn_es.clear_scroll(scroll_id = scroll_id)
-		return documents
+		with self._es_errors(f"validating index '{index_name}'"):
+			return self._altered_documents(conn_es, index_name, {"match_all": {}})
 
 
 	def validate_index_pattern_integrity(self, conn_es: Elasticsearch, index_pattern: str, timestamp_field: str, gte: str, lte: str) -> list:
@@ -563,18 +561,5 @@ class libPyElk:
 		Returns:
 			documents (list): Modified or altered documents' list.
 		"""
-		documents = []
-		body = {"query" : {"bool" : {"must" : [{"range" : {timestamp_field : {"gte" : gte, "lte" : lte}}},{"match_all" : {}}]}}}
-		response = conn_es.search(index = index_pattern, body = body, scroll = "2m", size = 1000, version = True)
-		scroll_id = response["_scroll_id"]
-		hits = response["hits"]["hits"]
-		with ThreadPoolExecutor(max_workers = os.cpu_count() * 2)  as executor:
-			while hits:
-				results = list(executor.map(self.validate_document, hits))
-				for item in results:
-					documents.extend(item)
-				response = conn_es.scroll(scroll_id = scroll_id, scroll = "2m")
-				scroll_id = response["_scroll_id"]
-				hits = response["hits"]["hits"]
-		conn_es.clear_scroll(scroll_id = scroll_id)
-		return documents
+		with self._es_errors(f"validating index pattern '{index_pattern}'"):
+			return self._altered_documents(conn_es, index_pattern, {"bool": {"filter": [{"range": {timestamp_field: {"gte": gte, "lte": lte}}}]}})
